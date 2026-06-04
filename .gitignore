@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Environment & secrets
+.env
+*.env
+!.env.example
+
+# Ekrom saved browser session (contains auth cookies — NEVER commit)
+storage_state.json
+data/sessions/
+data/storage_state*.json
+
+# Generated PDFs & runtime artifacts
+data/out/
+data/downloads/
+*.log
+
+# Playwright
+.playwright/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

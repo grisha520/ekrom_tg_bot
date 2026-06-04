@@ -1,0 +1,24 @@
+# Web server (MAX webhook receiver + manager web UI)
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# HTTP client (MAX Bot API + general requests)
+httpx==0.28.1
+
+# Browser automation for ekrom.ru (login session, cart, PDF download)
+playwright==1.49.1
+
+# LLM providers (parsing free-text requests into structured specs)
+openai==1.59.6
+
+# Config & data models
+pydantic==2.10.4
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# CLI
+typer==0.15.1
+
+# PDF text extraction (for validating/reading downloaded files)
+pypdf==5.1.0
