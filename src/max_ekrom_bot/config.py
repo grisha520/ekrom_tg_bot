@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     yandex_api_key: str = Field(default="", alias="YANDEX_API_KEY")
     yandex_folder_id: str = Field(default="", alias="YANDEX_FOLDER_ID")
     gigachat_auth_key: str = Field(default="", alias="GIGACHAT_AUTH_KEY")
+    # LLM-ре-ранк шортлиста подбора (#6): выбор лучшего товара моделью. По
+    # умолчанию выкл — работает детерминированный подбор. Включение добавляет
+    # один LLM-вызов на позицию (с детерминированным фолбэком при сбое).
+    llm_rerank: bool = Field(default=False, alias="LLM_RERANK")
 
     # ekrom.ru
     ekrom_base_url: str = Field(default="https://www.ekrom.ru", alias="EKROM_BASE_URL")

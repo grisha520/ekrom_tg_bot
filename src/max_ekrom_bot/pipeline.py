@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,9 +17,11 @@ from .config import Settings, get_settings
 from .ekrom.catalog import build_category_url, category_for
 from .ekrom.client import EkromAuthError, EkromCartError, EkromClient, product_slug
 from .matching import ProductSelector
-from .models import CustomerRequest, MatchedItem, ProductSpec, SelectionResult
+from .models import CatalogProduct, CustomerRequest, MatchedItem, ProductSpec, SelectionResult
 from .parsing import get_parser
 from .parsing.factory import Parser
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,6 +36,61 @@ _MAX_AVAILABILITY_CHECKS = 15
 
 # Сколько позиций обрабатывать одновременно (вкладок браузера параллельно).
 _MAX_PARALLEL_SPECS = 4
+
+# Размер шортлиста для LLM-ре-ранка (#6): сколько доступных+обогащённых
+# кандидатов собираем, прежде чем отдать модели на выбор.
+_LLM_SHORTLIST_K = 5
+
+# Ключи характеристик, которые показываем LLM в шортлисте (по подстроке имени).
+_RERANK_ATTR_KEYS = (
+    "тип", "вид", "цвет", "ширина", "конфор", "производит", "управлен", "очист", "объ",
+)
+
+
+def _candidate_brief(product: CatalogProduct) -> str:
+    """Краткое описание кандидата для LLM: название, цена и ключевые характеристики."""
+    head = product.title
+    if product.price is not None:
+        head = f"{head} — {product.price:.0f} ₽"
+    attrs = []
+    for k, v in (product.attributes or {}).items():
+        if any(s in k.lower() for s in _RERANK_ATTR_KEYS):
+            attrs.append(f"{k}: {v}")
+        if len(attrs) >= 8:
+            break
+    return head + ("; " + "; ".join(attrs) if attrs else "")
+
+
+_RERANK_SYSTEM = """\
+Ты выбираешь ОДИН товар из списка под запрос клиента на встраиваемую технику.
+Учитывай ВСЕ заданные требования (тип, цвет, размер, топливо, число конфорок,
+бренд/модель) и ценовой сегмент. Если указаны бренд/модель — при прочих равных
+предпочитай именно их. Верни СТРОГО JSON-объект:
+{"index": <номер выбранного варианта, целое>, "reason": "<краткое обоснование по-русски>"}
+Никакого текста, кроме JSON."""
+
+
+def _rerank_prompts(spec: ProductSpec, products: list[CatalogProduct], segment: str) -> tuple[str, str]:
+    """Системный и пользовательский промпты для LLM-ре-ранка шортлиста."""
+    req = [f"Тип техники: {spec.appliance.value}", f"Ценовой сегмент: {segment}"]
+    if spec.brand:
+        req.append(f"Бренд: {spec.brand}")
+    if spec.model:
+        req.append(f"Модель: {spec.model}")
+    if spec.color:
+        req.append(f"Цвет: {spec.color}")
+    if spec.fuel_type:
+        req.append(f"Тип/топливо: {spec.fuel_type}")
+    if spec.burners:
+        req.append(f"Число конфорок: {spec.burners}")
+    if spec.width_mm:
+        req.append(f"Ширина, мм: {spec.width_mm}")
+    if spec.exclude_colors:
+        req.append("Исключить цвета: " + ", ".join(spec.exclude_colors))
+
+    cands = [f"Вариант {i}: {_candidate_brief(p)}" for i, p in enumerate(products, 1)]
+    user = "Запрос клиента:\n" + "\n".join(req) + "\n\nКандидаты:\n" + "\n".join(cands)
+    return _RERANK_SYSTEM, user
 
 
 def _model_tokens(model: str | None) -> list[str]:
@@ -59,6 +118,14 @@ class Pipeline:
     def __init__(self, settings: Settings | None = None, parser: Parser | None = None) -> None:
         self._settings = settings or get_settings()
         self._parser = parser or get_parser(self._settings)
+        self._llm = None  # ленивый LLM-провайдер для ре-ранка (#6)
+
+    def _get_llm(self):
+        if self._llm is None:
+            from .llm import get_llm_provider
+
+            self._llm = get_llm_provider(self._settings)
+        return self._llm
 
     def parse_message(self, message: str) -> CustomerRequest:
         """Разобрать текст клиента в структурированный запрос (только LLM, без сети сайта)."""
@@ -115,6 +182,41 @@ class Pipeline:
                 reason="Подходящих вариантов с ценой не найдено",
             )
 
+        want_model, want_brand, tiers = self._build_tiers(spec, ranked)
+
+        # LLM-ре-ранк (#6) — включаемый слой. По умолчанию (флаг выкл) работает
+        # прежний детерминированный выбор «первого подходящего в наличии».
+        if self._settings.llm_rerank:
+            chosen, chosen_tier, llm_reason = await self._rerank_with_llm(
+                ekrom, selector, spec, tiers, page
+            )
+        else:
+            chosen, chosen_tier = await self._first_available(
+                ekrom, selector, spec, tiers, page
+            )
+            llm_reason = None
+
+        if chosen is None:
+            return MatchedItem(
+                spec=spec,
+                product=None,
+                candidates_count=len(candidates),
+                reason="Подходящие варианты найдены, но нет в наличии на ekrom",
+            )
+
+        reason = self._build_reason(
+            selector, spec, chosen, ranked, chosen_tier, want_model, want_brand, base=llm_reason
+        )
+        return MatchedItem(
+            spec=spec,
+            product=chosen,
+            candidates_count=len(candidates),
+            reason=reason,
+        )
+
+    @staticmethod
+    def _build_tiers(spec: ProductSpec, ranked: list) -> tuple[bool, bool, list[tuple[str, list]]]:
+        """Разложить кандидатов по приоритету: точная модель → бренд → прочие."""
         tokens = _model_tokens(spec.model)
         brand = (spec.brand or "").strip().lower()
         want_model = bool(tokens)
@@ -133,12 +235,14 @@ class Pipeline:
         if same_brand:
             tiers.append(("brand", same_brand))
         tiers.append(("rest", rest))
+        return want_model, want_brand, tiers
 
-        # Берём ПЕРВЫЙ подходящий товар в наличии по приоритету тиров и сразу
-        # останавливаемся — иначе проверка открывала бы страницу каждого
-        # кандидата и подбор затягивался бы на минуты.
-        chosen = None
-        chosen_tier = None
+    async def _first_available(self, ekrom, selector, spec, tiers, page):
+        """Первый подходящий товар в наличии по приоритету тиров (детерминированно).
+
+        Останавливаемся на первом валидном — иначе проверка открывала бы
+        страницу каждого кандидата и подбор затягивался бы на минуты.
+        """
         for tier_name, group in tiers:
             for product in group[:_MAX_AVAILABILITY_CHECKS]:
                 if product.in_stock is False:
@@ -149,35 +253,76 @@ class Pipeline:
                 )
                 if not available:
                     continue
-                # #4: обогащаем кандидата реальными характеристиками со страницы
-                # товара и отбрасываем выбор, если реальные данные противоречат
-                # запросу (то, чего не было видно в названии карточки).
+                # #4: обогащаем кандидата реальными характеристиками и отбрасываем
+                # выбор, если реальные данные противоречат запросу.
                 await ekrom.ensure_enriched(product, page)
                 if not selector.passes_filters(spec, product):
                     continue
-                chosen = product
-                chosen_tier = tier_name
-                break
-            if chosen is not None:
+                return product, tier_name
+        return None, None
+
+    async def _rerank_with_llm(self, ekrom, selector, spec, tiers, page):
+        """#6: собрать шортлист доступных+обогащённых кандидатов и выбрать лучший
+        моделью. При любой осечке LLM — детерминированный фолбэк на первый.
+
+        Возвращает (product, tier_name, llm_reason|None).
+        """
+        shortlist: list[tuple[str, CatalogProduct]] = []
+        for tier_name, group in tiers:
+            for product in group[:_MAX_AVAILABILITY_CHECKS]:
+                if len(shortlist) >= _LLM_SHORTLIST_K:
+                    break
+                if product.in_stock is False:
+                    continue
+                available = (
+                    product.in_stock is True
+                    or await ekrom.is_product_available(product, page)
+                )
+                if not available:
+                    continue
+                await ekrom.ensure_enriched(product, page)
+                if not selector.passes_filters(spec, product):
+                    continue
+                shortlist.append((tier_name, product))
+            if len(shortlist) >= _LLM_SHORTLIST_K:
                 break
 
-        if chosen is None:
-            return MatchedItem(
-                spec=spec,
-                product=None,
-                candidates_count=len(candidates),
-                reason="Подходящие варианты найдены, но нет в наличии на ekrom",
+        if not shortlist:
+            return None, None, None
+        if len(shortlist) == 1:
+            tier_name, product = shortlist[0]
+            return product, tier_name, None
+
+        idx, reason = await self._llm_pick(
+            spec, [p for _, p in shortlist], selector._segment
+        )
+        tier_name, product = shortlist[idx]
+        return product, tier_name, reason
+
+    async def _llm_pick(
+        self, spec: ProductSpec, products: list[CatalogProduct], segment: str
+    ) -> tuple[int, str | None]:
+        """Спросить LLM, какой кандидат лучший. Возвращает (индекс, обоснование).
+
+        Любая ошибка (сеть/таймаут/кривой JSON/индекс вне диапазона) → (0, None):
+        детерминированный фолбэк на первого кандидата шортлиста.
+        """
+        try:
+            system_prompt, user_prompt = _rerank_prompts(spec, products, segment)
+            # complete_json синхронный (OpenAI SDK) — уводим в поток, чтобы не
+            # блокировать event loop во время параллельной обработки позиций.
+            raw = await asyncio.to_thread(
+                self._get_llm().complete_json, system_prompt, user_prompt
             )
-
-        reason = self._build_reason(
-            selector, spec, chosen, ranked, chosen_tier, want_model, want_brand
-        )
-        return MatchedItem(
-            spec=spec,
-            product=chosen,
-            candidates_count=len(candidates),
-            reason=reason,
-        )
+            data = json.loads(raw)
+            idx = int(data.get("index")) - 1  # в промпте варианты с 1
+            reason = (str(data.get("reason") or "")).strip() or None
+            if 0 <= idx < len(products):
+                return idx, reason
+            logger.warning("LLM-ре-ранк вернул индекс вне диапазона: %s", data.get("index"))
+        except Exception:  # noqa: BLE001 — ре-ранк не критичен, есть фолбэк
+            logger.warning("LLM-ре-ранк не удался — фолбэк на детерминированный выбор", exc_info=True)
+        return 0, None
 
     @staticmethod
     def _build_reason(
@@ -188,9 +333,15 @@ class Pipeline:
         chosen_tier: str | None,
         want_model: bool,
         want_brand: bool,
+        base: str | None = None,
     ) -> str:
-        """Текст-обоснование с пометкой о замене, если запрошенное недоступно."""
-        base = selector._explain(spec, chosen, ranked)
+        """Текст-обоснование с пометкой о замене, если запрошенное недоступно.
+
+        base — готовое обоснование (например, от LLM-ре-ранка); если не задано,
+        берём детерминированное объяснение селектора.
+        """
+        if base is None:
+            base = selector._explain(spec, chosen, ranked)
         req_label = " ".join(x for x in [spec.brand, spec.model] if x).strip()
 
         # Замена по модели: просили конкретную модель, но взяли не её.
