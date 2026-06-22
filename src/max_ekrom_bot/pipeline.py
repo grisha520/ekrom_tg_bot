@@ -179,7 +179,7 @@ class Pipeline:
         want_brand: bool,
     ) -> str:
         """Текст-обоснование с пометкой о замене, если запрошенное недоступно."""
-        base = selector._explain(chosen, ranked)
+        base = selector._explain(spec, chosen, ranked)
         req_label = " ".join(x for x in [spec.brand, spec.model] if x).strip()
 
         # Замена по модели: просили конкретную модель, но взяли не её.
