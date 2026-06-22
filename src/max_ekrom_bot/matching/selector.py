@@ -44,10 +44,8 @@ class ProductSelector:
         self._segment = (segment or "средний").lower()
 
     def select_one(self, spec: ProductSpec, candidates: list[CatalogProduct]) -> MatchedItem:
-        filtered = [c for c in candidates if self._passes_filters(spec, c)]
-        priced = [c for c in filtered if c.price is not None]
-
-        if not priced:
+        ranked = self.ranked_candidates(spec, candidates)
+        if not ranked:
             return MatchedItem(
                 spec=spec,
                 product=None,
@@ -55,13 +53,27 @@ class ProductSelector:
                 reason="Подходящих вариантов с ценой не найдено",
             )
 
-        chosen = self._pick_by_segment(priced)
+        chosen = ranked[0]
         return MatchedItem(
             spec=spec,
             product=chosen,
             candidates_count=len(candidates),
-            reason=self._explain(chosen, priced),
+            reason=self._explain(chosen, ranked),
         )
+
+    def ranked_candidates(self, spec: ProductSpec, candidates: list[CatalogProduct]) -> list[CatalogProduct]:
+        """Кандидаты, прошедшие фильтры, отсортированные по ценовой стратегии сегмента."""
+        filtered = [c for c in candidates if self._passes_filters(spec, c)]
+        priced = [c for c in filtered if c.price is not None]
+        if not priced:
+            return []
+        ordered = sorted(priced, key=lambda p: p.price or 0.0)
+        if self._segment.startswith("эконом"):
+            return ordered
+        if self._segment.startswith("премиум"):
+            return list(reversed(ordered))
+        median = statistics.median(p.price or 0.0 for p in ordered)
+        return sorted(ordered, key=lambda p: abs((p.price or 0.0) - median))
 
     def select_all(self, specs_with_candidates: list[tuple[ProductSpec, list[CatalogProduct]]]) -> SelectionResult:
         items = [self.select_one(spec, cands) for spec, cands in specs_with_candidates]
@@ -75,16 +87,6 @@ class ProductSelector:
             if excluded and _title_has_color(title, excluded):
                 return False
         return True
-
-    def _pick_by_segment(self, priced: list[CatalogProduct]) -> CatalogProduct:
-        ordered = sorted(priced, key=lambda p: p.price or 0.0)
-        if self._segment.startswith("эконом"):
-            return ordered[0]
-        if self._segment.startswith("премиум"):
-            return ordered[-1]
-        # средний: вариант, ближайший к медиане цен
-        median = statistics.median(p.price or 0.0 for p in ordered)
-        return min(ordered, key=lambda p: abs((p.price or 0.0) - median))
 
     def _explain(self, chosen: CatalogProduct, priced: list[CatalogProduct]) -> str:
         prices = sorted(p.price or 0.0 for p in priced)

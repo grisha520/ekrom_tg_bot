@@ -28,11 +28,25 @@ SEL_PRODUCT_CARD = ".product-card"
 SEL_PRODUCT_LINK = "a.product-card__name"
 SEL_PRODUCT_PRICE = ".product-card__price"
 SEL_PRODUCT_PRICE_OLD = ".product-card__price-old"
-# В списке (карточка категории) — .js-product-add; на странице товара главная
-# кнопка покупки — .js-detail-add (а .js-product-add там относится к блоку «похожие»).
+# В списке (карточка категории) — .js-product-add.
 SEL_ADD_TO_CART_CARD = ".js-product-add"
-SEL_ADD_TO_CART = "button.js-detail-add"
+# На странице товара главная кнопка «В корзину» — это видимая rect-кнопка в
+# основном блоке товара (.js-detail). Раньше целились в button.js-detail-add,
+# но на части карточек она скрыта (есть видимый дубль .js-product-add), из-за
+# чего товар не добавлялся и PDF выходил неполным. Берём ПЕРВУЮ ВИДИМУЮ.
+SEL_ADD_TO_CART = (
+    ".js-detail button.js-detail-add:visible, "
+    ".js-detail .rect-btn.js-detail-add:visible, "
+    "button.js-detail-add:visible"
+)
 SEL_CART_PDF_DOWNLOAD = "#print_order_button, .rect-btn.blue[data-bound-pdf='Y']"
+
+# Статус наличия (подтверждено по DOM ekrom): на странице товара —
+# .product-box__status, в карточке каталога — .product-info__stock-status.
+SEL_PRODUCT_STATUS = (
+    ".product-box__status, .product-card__status, .product-info__stock-status"
+)
+SEL_PRODUCT_OUT_OF_STOCK = ".product-box__out-of-stock.show, .product-card__out-of-stock.show"
 
 # Форма входа (/auth/) — капчи нет
 SEL_LOGIN_EMAIL = "input[placeholder*='email'], input[type='email'], input[name='USER_LOGIN']"
@@ -40,9 +54,92 @@ SEL_LOGIN_PASSWORD = "input[type='password']"
 SEL_LOGIN_SUBMIT = "button:has-text('Войти')"
 
 
+class EkromAuthError(RuntimeError):
+    """Сессия ekrom истекла или отсутствует — требуется повторный вход.
+
+    Поднимается перед операциями, которым нужна авторизация (корзина, PDF),
+    чтобы показать менеджеру понятное сообщение вместо общей ошибки.
+    """
+
+
+class EkromCartError(RuntimeError):
+    """Не удалось добавить часть товаров в корзину (например, нет в наличии).
+
+    Несёт список названий, которые не попали в корзину, чтобы не формировать
+    молча неполный PDF, а показать менеджеру понятное сообщение.
+    """
+
+    def __init__(self, missing_titles: list[str]) -> None:
+        self.missing_titles = missing_titles
+        super().__init__("Не удалось добавить в корзину: " + ", ".join(missing_titles))
+
+
+def product_slug(url: str) -> str:
+    """Извлечь slug товара из URL вида .../products/<slug>/.
+
+    Сначала отбрасываем query/fragment, и только потом снимаем слэши — иначе
+    при наличии «?...» у одной ссылки и его отсутствии у другой slug'и одного и
+    того же товара разойдутся (foo vs foo/) и состав корзины сверится неверно.
+    """
+    tail = re.sub(r".*/products/", "", url or "")
+    tail = tail.split("?")[0].split("#")[0]
+    return tail.strip("/")
+
+
 def _parse_price(text: str) -> float | None:
     digits = re.sub(r"[^\d]", "", text or "")
     return float(digits) if digits else None
+
+
+async def _basket_response_ok(resp) -> bool:
+    """Проверить, что POST /local/ajax/basket.php подтвердил добавление."""
+    if not resp.ok:
+        return False
+    try:
+        data = await resp.json()
+        if isinstance(data, dict):
+            result = data.get("RESULT", data.get("result"))
+            if result is not None:
+                return int(result) == 1
+    except Exception:  # noqa: BLE001 — не JSON; пробуем по тексту
+        pass
+    try:
+        text = (await resp.text()).strip()
+        return '"RESULT":1' in text.replace(" ", "") or '"result":1' in text.replace(" ", "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _parse_availability_status(text: str) -> bool | None:
+    """Разобрать текст статуса ekrom → in_stock / unknown."""
+    low = (text or "").strip().lower()
+    if not low:
+        return None
+    if "нет в наличии" in low:
+        return False
+    if "под заказ" in low or "в наличии" in low:
+        return True
+    return None
+
+
+async def _read_availability(scope) -> bool | None:
+    """Прочитать статус наличия из блока карточки или страницы товара."""
+    status_el = scope.locator(SEL_PRODUCT_STATUS).first
+    if await status_el.count():
+        try:
+            parsed = _parse_availability_status(await status_el.inner_text())
+            if parsed is not None:
+                return parsed
+        except Exception:  # noqa: BLE001
+            pass
+
+    oos_el = scope.locator(SEL_PRODUCT_OUT_OF_STOCK).first
+    try:
+        if await oos_el.count() and await oos_el.is_visible():
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _visible(selector: str) -> str:
@@ -96,6 +193,14 @@ class EkromClient:
             raise RuntimeError("EkromClient не запущен — вызовите start()/используйте 'async with'")
         return self._page
 
+    async def new_page(self) -> Page:
+        """Создать дополнительную вкладку (для параллельной обработки позиций)."""
+        if self._context is None:
+            raise RuntimeError("EkromClient не запущен — вызовите start()/используйте 'async with'")
+        page = await self._context.new_page()
+        page.on("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+        return page
+
     # ── Авторизация ────────────────────────────────────────────────────────────
     async def login(self, email: str | None = None, password: str | None = None) -> None:
         """Вход в кабинет (капчи нет). Учётка берётся из аргументов или .env.
@@ -139,32 +244,68 @@ class EkromClient:
             await self._context.storage_state(path=str(state_path))
         return state_path
 
+    async def is_authenticated(self) -> bool:
+        """Проверить, жива ли сохранённая сессия (открыт ли личный кабинет).
+
+        Незалогиненного пользователя ekrom редиректит на `/?needAuth=Y`, а в
+        шапке показывает ссылку «Войти» вместо «Выйти».
+        """
+        url = f"{self._settings.ekrom_base_url.rstrip('/')}/personal/"
+        await self.page.goto(url, wait_until="domcontentloaded")
+        await self.page.wait_for_timeout(1200)
+        if "needauth" in self.page.url.lower():
+            return False
+        logout = await self.page.locator("a[href*='logout'], a:has-text('Выйти')").count()
+        return logout > 0
+
     # ── Каталог ────────────────────────────────────────────────────────────────
-    async def browse_category(self, category_path: str, limit: int = 60) -> list[CatalogProduct]:
+    async def browse_category(
+        self, category_path: str, limit: int = 60, page: Page | None = None
+    ) -> list[CatalogProduct]:
         """Прочитать товары со страницы категории (без фильтров)."""
         url = f"{self._settings.ekrom_base_url.rstrip('/')}{category_path}"
-        return await self.browse_url(url, limit)
+        return await self.browse_url(url, limit, page=page)
 
-    async def browse_url(self, url: str, limit: int = 60) -> list[CatalogProduct]:
+    async def browse_url(
+        self, url: str, limit: int = 60, page: Page | None = None
+    ) -> list[CatalogProduct]:
         """Перейти по готовому URL категории (возможно, с фильтрами) и собрать карточки.
 
         Поиск по сайту (/search/) карточки не отдаёт, поэтому работаем по URL категорий.
         """
-        await self.page.goto(url, wait_until="domcontentloaded")
-        await self.page.wait_for_timeout(1500)  # списки догружаются скриптом
-        return await self._collect_cards(limit)
+        page = page or self.page
+        await page.goto(url, wait_until="domcontentloaded")
+        await self._wait_for_cards(page)
+        return await self._collect_cards(limit, page)
 
-    async def search(self, query: str, limit: int = 20) -> list[CatalogProduct]:
+    async def search(
+        self, query: str, limit: int = 20, page: Page | None = None
+    ) -> list[CatalogProduct]:
         """Поиск по строке сайта (fallback). На ekrom отдаёт мало карточек —
         предпочтительнее browse_category()."""
+        page = page or self.page
         url = build_search_url(self._settings.ekrom_base_url, query)
-        await self.page.goto(url, wait_until="domcontentloaded")
-        await self.page.wait_for_timeout(1500)
-        return await self._collect_cards(limit)
+        await page.goto(url, wait_until="domcontentloaded")
+        await self._wait_for_cards(page)
+        return await self._collect_cards(limit, page)
 
-    async def _collect_cards(self, limit: int) -> list[CatalogProduct]:
+    async def _wait_for_cards(self, page: Page | None = None) -> None:
+        """Дождаться появления карточек товаров вместо фиксированной паузы.
+
+        Списки догружаются скриптом; ждём первую карточку (до 6 c) и даём
+        небольшую досборку. Если карточек нет — выходим сразу (категория пуста).
+        """
+        page = page or self.page
+        try:
+            await page.wait_for_selector(SEL_PRODUCT_CARD, timeout=6000, state="attached")
+        except Exception:  # noqa: BLE001 — пусто/не догрузилось; _collect_cards вернёт []
+            return
+        await page.wait_for_timeout(300)
+
+    async def _collect_cards(self, limit: int, page: Page | None = None) -> list[CatalogProduct]:
+        page = page or self.page
         products: list[CatalogProduct] = []
-        cards = self.page.locator(SEL_PRODUCT_CARD)
+        cards = page.locator(SEL_PRODUCT_CARD)
         count = min(await cards.count(), limit)
         for i in range(count):
             card = cards.nth(i)
@@ -179,6 +320,8 @@ class EkromClient:
             price_el = card.locator(SEL_PRODUCT_PRICE).first
             price = _parse_price(await price_el.inner_text()) if await price_el.count() else None
 
+            in_stock: bool | None = await _read_availability(card)
+
             if not title or not href:
                 continue
             products.append(
@@ -187,85 +330,214 @@ class EkromClient:
                     url=self._abs_url(href),
                     price=price,
                     product_id=product_id,
+                    in_stock=in_stock,
                 )
             )
         return products
 
-    # ── Корзина ────────────────────────────────────────────────────────────────
-    async def add_to_cart(self, product: CatalogProduct) -> bool:
-        """Открыть страницу товара и нажать главную кнопку «Добавить в корзину».
+    async def is_product_available(
+        self, product: CatalogProduct, page: Page | None = None
+    ) -> bool:
+        """Проверить наличие на странице товара (кэширует результат в product.in_stock)."""
+        if product.in_stock is not None:
+            return product.in_stock
 
-        На странице товара главная кнопка — .js-detail-add (преселектится
-        дефолтный оффер). Кнопки .js-product-add там относятся к «похожим».
-        """
-        await self.page.goto(product.url, wait_until="domcontentloaded")
-        await self.page.wait_for_timeout(700)
-        btn = self.page.locator(SEL_ADD_TO_CART).first
-        if not await btn.count():
-            return False
+        page = page or self.page
+        await page.goto(product.url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1200)
+
+        parsed = await _read_availability(page.locator(".js-detail").first)
+        if parsed is None:
+            parsed = await _read_availability(page)
+        if parsed is not None:
+            product.in_stock = parsed
+            return parsed
+
+        btn = page.locator(SEL_ADD_TO_CART).first
         try:
-            await btn.scroll_into_view_if_needed(timeout=4000)
-            await btn.click(timeout=8000)
-        except Exception:  # noqa: BLE001 — возможно перекрыта; пробуем принудительно
-            try:
-                await btn.click(force=True, timeout=4000)
-            except Exception:  # noqa: BLE001
+            if not await btn.count() or not await btn.is_visible() or not await btn.is_enabled():
+                product.in_stock = False
                 return False
-        await self.page.wait_for_timeout(1200)  # дать корзине обновиться
+        except Exception:  # noqa: BLE001
+            product.in_stock = False
+            return False
+
+        product.in_stock = True
         return True
 
-    async def clear_cart(self) -> None:
+    # ── Корзина ────────────────────────────────────────────────────────────────
+    async def add_to_cart(self, product: CatalogProduct, page: Page | None = None) -> bool:
+        """Открыть страницу товара и нажать кнопку «Добавить/В корзину».
+
+        Подтверждаем добавление по ответу POST /local/ajax/basket.php (RESULT=1).
+        Товары «под заказ» на ekrom тоже кладутся в корзину — это не «нет в наличии».
+        """
+        page = page or self.page
+        await page.goto(product.url, wait_until="domcontentloaded")
+        try:
+            await page.wait_for_selector(".js-detail", timeout=8000, state="attached")
+        except Exception:  # noqa: BLE001 — блок мог уже быть
+            pass
+
+        btn = page.locator(SEL_ADD_TO_CART).first
+        try:
+            await btn.wait_for(state="visible", timeout=8000)
+        except Exception:  # noqa: BLE001 — кнопки нет/не появилась
+            return False
+
+        def _is_basket(resp) -> bool:
+            return "local/ajax/basket.php" in resp.url and resp.request.method == "POST"
+
+        for attempt in range(3):
+            try:
+                await btn.scroll_into_view_if_needed(timeout=4000)
+            except Exception:  # noqa: BLE001
+                pass
+            force = attempt > 0
+            try:
+                async with page.expect_response(_is_basket, timeout=15000) as resp_info:
+                    await btn.click(timeout=8000, force=force)
+                if await _basket_response_ok(await resp_info.value):
+                    return True
+            except Exception:  # noqa: BLE001 — таймаут/клик не прошёл; ретрай
+                pass
+            await page.wait_for_timeout(600 + attempt * 400)
+        return False
+
+    async def open_cart(self, page: Page | None = None) -> None:
+        """Открыть страницу корзины/оформления (тяжёлая страница order/make).
+
+        Используем wait_until='commit' + явное ожидание ключевых элементов,
+        чтобы не ждать полной загрузки всех подресурсов страницы.
+        """
+        page = page or self.page
+        cart_url = f"{self._settings.ekrom_base_url.rstrip('/')}/personal/cart/"
+        try:
+            await page.goto(cart_url, wait_until="commit")
+        except Exception:  # noqa: BLE001 — навигация могла уже идти
+            pass
+        try:
+            await page.wait_for_selector(
+                "a[href*='/products/'], .basket-delete-selected-btn, "
+                f"{SEL_CART_PDF_DOWNLOAD}",
+                timeout=4500,
+                state="attached",
+            )
+            # wait_for_selector срабатывает на ПЕРВОМ товаре, тогда как список
+            # может дорисовываться. Короткая стабилизация исключает ложное
+            # «товара не хватает» и дорогой повторный цикл добавления.
+            await page.wait_for_timeout(700)
+        except Exception:  # noqa: BLE001 — корзина пуста/не догрузилась
+            await page.wait_for_timeout(400)
+
+    async def read_cart_slugs(self, page: Page | None = None) -> set[str]:
+        """Прочитать slug'и товаров с УЖЕ открытой страницы корзины."""
+        page = page or self.page
+        hrefs = await page.evaluate(
+            "() => Array.from(document.querySelectorAll('a[href*=\"/products/\"]'))"
+            ".map(a => a.getAttribute('href'))"
+        )
+        return {product_slug(h) for h in hrefs if h and "/products/" in h}
+
+    async def cart_slugs(self, page: Page | None = None) -> set[str]:
+        """Множество slug'ов товаров, фактически лежащих в корзине.
+
+        Состав читаем по ссылкам на товары (a[href*='/products/']) — это
+        надёжнее, чем считать строки (.cart-item даёт дубли мобайл/десктоп).
+        """
+        page = page or self.page
+        await self.open_cart(page)
+        return await self.read_cart_slugs(page)
+
+    async def clear_cart(self, already_open: bool = False) -> None:
         """Очистить корзину: «Выбрать все» → «Удалить выбранные», в цикле до пустой.
 
         На странице корзины нет одиночной кнопки «Очистить»; надёжный путь —
         выделить все позиции и удалить выбранные, повторяя при необходимости.
+        Пустоту определяем по фактическому наличию товаров (ссылок), а не по
+        кнопке удаления — это надёжнее при быстрой навигации. Если страница уже
+        открыта (already_open=True), не перезагружаем её на первой итерации.
         """
-        cart_url = f"{self._settings.ekrom_base_url.rstrip('/')}/personal/cart/"
-        await self.page.goto(cart_url, wait_until="domcontentloaded")
-        await self.page.wait_for_timeout(1500)
+        for i in range(6):
+            if i > 0 or not already_open:
+                await self.open_cart()
 
-        for _ in range(8):
+            if not await self.read_cart_slugs():
+                return  # корзина пуста — готово
+
             select_all = self.page.locator(".basket-select-all-btn").first
             del_btn = self.page.locator(".basket-delete-selected-btn").first
-            # Кнопки удаления нет/не видна → корзина пуста
-            if not (await del_btn.count() and await del_btn.is_visible()):
-                break
-
             try:
+                if not (await del_btn.count() and await del_btn.is_visible()):
+                    return  # товары есть, но удалить нечем — не зацикливаемся
+                # Удаление вызывает нативный confirm() (авто-обработчик) и
+                # навигацию — клики/ожидания терпимы к этому.
                 if await select_all.count():
                     await select_all.click(timeout=4000)
-                    await self.page.wait_for_timeout(500)
+                    await self.page.wait_for_timeout(300)
                 await del_btn.click(timeout=5000)
-            except Exception:  # noqa: BLE001
-                break
+            except Exception:  # noqa: BLE001 — навигация во время клика — это ок
+                pass
 
-            await self.page.wait_for_timeout(1000)
-            # возможное подтверждение в модалке
-            confirm = self.page.get_by_role("button", name=re.compile(r"Да|Удалить|Очистить", re.I)).first
-            if await confirm.count():
-                try:
-                    await confirm.click(timeout=2000)
-                except Exception:  # noqa: BLE001
-                    pass
-            await self.page.wait_for_timeout(1500)
-            await self.page.reload(wait_until="domcontentloaded")
-            await self.page.wait_for_timeout(1500)
+            await self.page.wait_for_timeout(800)
 
-    async def download_cart_pdf(self, out_path: Path) -> Path:
-        """Перейти в корзину и скачать PDF со списком товаров.
+    async def download_cart_pdf_direct(self, out_path: Path) -> Path:
+        """Скачать PDF корзины прямым запросом к cart_pdf.php (без рендера страницы).
 
-        Требует авторизованной сессии (storage_state). Возвращает путь к файлу.
+        Кнопка «PDF» на сайте просто дёргает этот эндпоинт, который генерит
+        документ из серверной корзины. Запрос идёт через контекст браузера, так
+        что куки сессии подхватываются автоматически. При любой осечке —
+        откатываемся на скачивание через кнопку.
         """
-        # Подтверждено: /personal/cart/ редиректит на /personal/order/make/
-        cart_url = f"{self._settings.ekrom_base_url.rstrip('/')}/personal/cart/"
-        await self.page.goto(cart_url, wait_until="domcontentloaded")
+        if self._context is None:
+            raise RuntimeError("EkromClient не запущен")
+        pdf_url = f"{self._settings.ekrom_base_url.rstrip('/')}/personal/cart_pdf.php"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            # Генерация PDF на сервере небыстрая — даём щедрый таймаут.
+            resp = await self._context.request.get(pdf_url, timeout=45000)
+            body = await resp.body()
+            if resp.status == 200 and body[:5] == b"%PDF-":
+                out_path.write_bytes(body)
+                return out_path
+        except Exception:  # noqa: BLE001 — упадём в фолбэк ниже
+            pass
+        return await self.download_cart_pdf(out_path, navigate=True)
+
+    async def download_cart_pdf(self, out_path: Path, navigate: bool = True) -> Path:
+        """Скачать PDF со списком товаров из корзины.
+
+        Требует авторизованной сессии (storage_state). Если navigate=False,
+        считаем, что страница корзины уже открыта (экономит тяжёлую загрузку).
+        """
+        if navigate:
+            await self.open_cart()
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        async with self.page.expect_download() as dl_info:
-            await self.page.locator(SEL_CART_PDF_DOWNLOAD).first.click()
-        download = await dl_info.value
-        await download.save_as(str(out_path))
-        return out_path
+
+        # Кнопка PDF активна только когда к ней привязан обработчик
+        # (атрибут data-bound-pdf='Y'). Ждём именно это состояние, иначе клик
+        # «вхолостую» не вызывает скачивания — особенно при быстрой навигации.
+        bound = self.page.locator("[data-bound-pdf='Y']").first
+        try:
+            await bound.wait_for(state="visible", timeout=10000)
+            target = bound
+        except Exception:  # noqa: BLE001 — атрибута нет; берём любую кнопку печати
+            target = self.page.locator(SEL_CART_PDF_DOWNLOAD).first
+            await target.wait_for(state="visible", timeout=8000)
+
+        last_err: Exception | None = None
+        for attempt in range(2):
+            try:
+                async with self.page.expect_download(timeout=20000) as dl_info:
+                    await target.click(timeout=8000)
+                download = await dl_info.value
+                await download.save_as(str(out_path))
+                return out_path
+            except Exception as err:  # noqa: BLE001 — клик не дал download, ретрай
+                last_err = err
+                await self.page.wait_for_timeout(1500)
+        raise last_err if last_err else RuntimeError("PDF download failed")
 
     # ── Вспомогательное ─────────────────────────────────────────────────────────
     def _abs_url(self, href: str) -> str:

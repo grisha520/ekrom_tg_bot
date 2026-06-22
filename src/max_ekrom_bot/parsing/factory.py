@@ -23,6 +23,9 @@ def get_parser(settings: Settings | None = None) -> Parser:
 
         return RuleBasedParser()
 
+    from ..llm import get_llm_provider
     from .parser import RequestParser
 
-    return RequestParser()
+    # Пробрасываем те же settings в провайдера, иначе RequestParser молча
+    # возьмёт глобальный .env (важно, когда Pipeline создан с кастомными settings).
+    return RequestParser(get_llm_provider(settings))

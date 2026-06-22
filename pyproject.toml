@@ -9,8 +9,12 @@ description = "Бот для МАКС: подбор техники на ekrom.ru
 requires-python = ">=3.10"
 readme = "README.md"
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]

@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ApplianceType(str, Enum):
@@ -34,6 +34,9 @@ class ProductSpec(BaseModel):
     appliance: ApplianceType = ApplianceType.UNKNOWN
     raw_text: str = ""
 
+    brand: Optional[str] = Field(default=None, description="Бренд/производитель, если указан (Korting, Bosch…)")
+    model: Optional[str] = Field(default=None, description="Конкретная модель/артикул, если указан (OGG 771 CFX)")
+
     width_mm: Optional[int] = Field(default=None, description="Ширина, мм (например 600, 450)")
     color: Optional[str] = Field(default=None, description="Цвет: нержавейка, белый, чёрный…")
     install_type: Optional[str] = Field(default=None, description="Тип установки: полновстраиваемая, встраиваемая…")
@@ -46,6 +49,18 @@ class ProductSpec(BaseModel):
     # Жёсткие исключения (например «не чёрную»)
     exclude_colors: list[str] = Field(default_factory=list)
 
+    # LLM нередко присылает null вместо пустого списка/словаря — приводим к default,
+    # чтобы валидация не падала (поля по схеме всё равно необязательные).
+    @field_validator("exclude_colors", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v: object) -> object:
+        return [] if v is None else v
+
+    @field_validator("extra", mode="before")
+    @classmethod
+    def _none_to_empty_dict(cls, v: object) -> object:
+        return {} if v is None else v
+
 
 class CustomerRequest(BaseModel):
     """Полный разобранный запрос клиента: список позиций + контекст."""
@@ -54,6 +69,11 @@ class CustomerRequest(BaseModel):
     segment: Optional[str] = Field(default=None, description="Ценовой сегмент: эконом/средний/премиум")
     notes: Optional[str] = None
     original_message: str = ""
+
+    @field_validator("specs", mode="before")
+    @classmethod
+    def _none_to_empty_list(cls, v: object) -> object:
+        return [] if v is None else v
 
 
 class CatalogProduct(BaseModel):
@@ -67,6 +87,8 @@ class CatalogProduct(BaseModel):
     # ID для добавления в корзину (Bitrix product id), если удалось вытащить
     product_id: Optional[str] = None
     attributes: dict[str, str] = Field(default_factory=dict)
+    # None — ещё не проверяли; True/False — результат проверки на ekrom
+    in_stock: Optional[bool] = None
 
 
 class MatchedItem(BaseModel):

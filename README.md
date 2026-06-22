@@ -50,12 +50,16 @@ cp .env.example .env   # затем заполните .env
 
 Все ключи — в `.env` (см. `.env.example`). Минимум для прототипа:
 
-- `OPENAI_API_KEY` — для разбора сообщений (LLM_PROVIDER=openai).
-- `EKROM_BASE_URL` — уже задан.
-- `MAX_BOT_TOKEN` — токен бота из https://dev.max.ru (нужен для слоя мессенджера).
+- `LLM_PROVIDER` — `groq` (по умолчанию в `.env.example`, бесплатный тариф) или
+  `openai`. Для `groq` нужен `GROQ_API_KEY`, для `openai` — `OPENAI_API_KEY`.
+- `EKROM_BASE_URL` — уже задан; `EKROM_LOGIN`/`EKROM_PASSWORD` — для авто-входа.
+- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_ALLOWED_IDS` — для Telegram-бота менеджеров.
+- `MAX_BOT_TOKEN` — токен бота из https://dev.max.ru (нужен для слоя мессенджера МАКС).
 
-Для РФ-комплаенса LLM-провайдера можно переключить на YandexGPT/GigaChat —
-интерфейс уже абстрагирован (`llm/factory.py`), нужно дописать класс провайдера.
+Без сети можно парсить и правилами: `LLM_PROVIDER=rule` (см. `parsing/rule_parser.py`),
+ключи не требуются. Для РФ-комплаенса LLM-провайдера можно переключить на
+YandexGPT/GigaChat — интерфейс уже абстрагирован (`llm/factory.py`), нужно
+дописать класс провайдера.
 
 ## Авторизация на ekrom.ru
 
@@ -89,6 +93,19 @@ python -m max_ekrom_bot.cli run    "..."  --pdf
 uvicorn max_ekrom_bot.webapp:app --host 127.0.0.1 --port 8000
 # открыть http://127.0.0.1:8000 — вставить текст клиента → превью → PDF
 ```
+
+**Telegram-бот для менеджеров** (работает с локального ПК, отдельный сервер не нужен —
+но ПК с ботом должен быть включён):
+
+```bash
+# в .env: TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_IDS, GROQ_API_KEY, EKROM_LOGIN/PASSWORD
+pip install -r requirements.txt
+powershell -File scripts/start_telegram_bot.ps1
+# в Telegram: /start → вставить текст клиента → кнопка «Сформировать PDF»
+```
+
+Команды бота: `/start`, `/status` (сессия ekrom), `/login` (обновить вход).
+Доступ только у user_id из `TELEGRAM_ALLOWED_IDS`.
 
 Сервер вебхуков МАКС (если появится официальный бот):
 
@@ -137,13 +154,26 @@ python scripts/test_ekrom.py
 src/max_ekrom_bot/
   config.py            # настройки из .env
   models.py            # доменные модели (запрос, товар, подбор)
-  llm/                 # абстракция LLM + OpenAI-провайдер
-  parsing/             # текст клиента → CustomerRequest
+  llm/                 # абстракция LLM + провайдеры OpenAI / Groq
+  parsing/             # текст клиента → CustomerRequest (LLM или rule_parser)
   ekrom/               # Playwright: каталог, корзина, PDF, сессия
   matching/            # подбор по цене (средний/эконом/премиум)
-  messenger/           # клиент Bot API МАКС
+  messenger/           # клиент Bot API МАКС + форматирование для Telegram
   pipeline.py          # оркестрация ядра
   cli.py               # запуск без мессенджера
-  server.py            # FastAPI вебхук-сервер
+  webapp.py            # веб-интерфейс для менеджера (FastAPI)
+  telegram_app.py      # Telegram-бот для менеджеров (long polling)
+  server.py            # FastAPI вебхук-сервер МАКС
 scripts/login_ekrom.py # разовая ручная авторизация → storage_state.json
+tests/                 # юнит-тесты чистой логики (pytest, без сети)
+```
+
+## Тесты
+
+Юнит-тесты покрывают логику без сети (парсер, подбор, сборка URL-фильтров,
+модели, форматирование):
+
+```bash
+pip install -e ".[dev]"   # или: pip install pytest
+pytest
 ```

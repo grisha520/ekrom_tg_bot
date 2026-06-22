@@ -21,6 +21,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # Telegram (бот для менеджеров)
+    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
+    # Список Telegram user_id менеджеров через запятую (узнать: @userinfobot)
+    telegram_allowed_ids: str = Field(default="", alias="TELEGRAM_ALLOWED_IDS")
+    # Прокси для api.telegram.org (если без VPN не подключается), напр.:
+    # socks5://127.0.0.1:10808  или  http://127.0.0.1:8080
+    telegram_proxy: str = Field(default="", alias="TELEGRAM_PROXY")
+
     # MAX
     max_bot_token: str = Field(default="", alias="MAX_BOT_TOKEN")
     max_api_base_url: str = Field(default="https://botapi.max.ru", alias="MAX_API_BASE_URL")
@@ -30,6 +38,11 @@ class Settings(BaseSettings):
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
     llm_model: str = Field(default="gpt-4o-mini", alias="LLM_MODEL")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    # Groq (OpenAI-совместимый API, бесплатный тариф)
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    groq_base_url: str = Field(
+        default="https://api.groq.com/openai/v1", alias="GROQ_BASE_URL"
+    )
     yandex_api_key: str = Field(default="", alias="YANDEX_API_KEY")
     yandex_folder_id: str = Field(default="", alias="YANDEX_FOLDER_ID")
     gigachat_auth_key: str = Field(default="", alias="GIGACHAT_AUTH_KEY")
@@ -44,6 +57,18 @@ class Settings(BaseSettings):
     ekrom_headful: bool = Field(default=False, alias="EKROM_HEADFUL")
     output_dir: str = Field(default="data/out", alias="OUTPUT_DIR")
     require_confirmation: bool = Field(default=True, alias="REQUIRE_CONFIRMATION")
+
+    @property
+    def allowed_telegram_user_ids(self) -> frozenset[int]:
+        raw = (self.telegram_allowed_ids or "").strip()
+        if not raw:
+            return frozenset()
+        ids: set[int] = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if part:
+                ids.add(int(part))
+        return frozenset(ids)
 
     @property
     def storage_state_path(self) -> Path:
