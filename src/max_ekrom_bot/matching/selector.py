@@ -37,6 +37,21 @@ _COLOR_TOKENS: dict[str, dict[str, set[str]]] = {
     "серый": {"sub": {"сер"}, "codes": {"gy", "grey", "gray"}},
 }
 
+# Семьи цветов: оттенки одной семьи не конфликтуют между собой. Нужно, чтобы под
+# запрос «чёрный» подходили тёмные варианты (графит/антрацит/чёрное стекло), но
+# отсекался явно другой цвет (белый/бежевый). Цвет, которого здесь нет, образует
+# собственную «семью» (сам с собой).
+_COLOR_FAMILY: dict[str, str] = {
+    "чёрный": "тёмный",
+    "чёрный матовый": "тёмный",
+    "графит": "тёмный",
+    "антрацит": "тёмный",
+    "серый": "тёмный",
+    "белый": "светлый",
+    "бежевый": "светлый",
+    "нержавейка": "сталь",
+}
+
 # Синонимы цвета → канонический ключ из _COLOR_TOKENS (LLM присылает по-разному).
 _CANON_COLOR: dict[str, str] = {
     "нержавеющая сталь": "нержавейка",
@@ -54,8 +69,21 @@ _ELECTRIC_FAMILY = {"электрическая", "индукционная"}
 
 
 def _canon_color(color: str) -> str:
+    """Привести цвет к каноническому ключу _COLOR_TOKENS.
+
+    Терпимо к форме слова: LLM присылает цвет в роде, согласованном с техникой
+    («вытяжка чёрная», «шкаф чёрный», «панель чёрная»). Нормализуем по стему
+    («чёрн» → «чёрный»), иначе подбор по цвету ломается на роде/склонении.
+    """
     c = color.strip().lower()
-    return _CANON_COLOR.get(c, c)
+    if c in _CANON_COLOR:
+        return _CANON_COLOR[c]
+    if c in _COLOR_TOKENS:
+        return c
+    for canon, tokens in _COLOR_TOKENS.items():
+        if any(sub in c for sub in tokens["sub"]):
+            return canon
+    return c
 
 
 def _title_has_color(title: str, color: str) -> bool:
@@ -104,6 +132,20 @@ def _title_width_mm(title: str) -> int | None:
         if 400 <= v <= 1200:
             return v
     return None
+
+
+def _color_conflict(want: str, have: set[str]) -> bool:
+    """Конфликт цвета: в товаре заявлен цвет ДРУГОЙ семьи, чем запрошен.
+
+    Оттенки одной семьи не конфликтуют (графит/антрацит/чёрный — «тёмные»), но
+    явно другой цвет (белый под запрос чёрного) — конфликт. Молчание (have
+    пусто) конфликтом не считается.
+    """
+    if not have or want in have:
+        return False
+    want_fam = _COLOR_FAMILY.get(want, want)
+    have_fams = {_COLOR_FAMILY.get(c, c) for c in have}
+    return want_fam not in have_fams
 
 
 def _fuel_conflict(want: str, have: set[str]) -> bool:
@@ -213,6 +255,22 @@ class ProductSelector:
         """Публичная обёртка: применима для повторной валидации после обогащения."""
         return self._passes_filters(spec, product)
 
+    def color_confirmed_by_title(self, spec: ProductSpec, product: CatalogProduct) -> bool:
+        """Подтверждает ли НАЗВАНИЕ товара совместимый с запросом цвет.
+
+        Нужно, чтобы не открывать страницу товара зря: если цвет уже виден в
+        названии (напр. «...BLACK») и совместим с запросом — доверяем карточке.
+        Если цвет не запрошен — True (проверять нечего). Если цвет в названии не
+        распознан — False: страницу нужно открыть и проверить по характеристикам
+        (иначе пропустим, например, белую модель с «BLANC» в названии).
+        """
+        if not spec.color:
+            return True
+        title_colors = _title_colors(product.title)
+        if not title_colors:
+            return False
+        return not _color_conflict(_canon_color(spec.color), title_colors)
+
     def _passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
         colors = _product_colors(product)
 
@@ -224,7 +282,7 @@ class ProductSelector:
         # Позитивная валидация (#1): отбрасываем только при ЯВНОМ противоречии
         # (заявлен другой цвет/топливо/число конфорок). Молчание — ок. Сигналы
         # берутся из названия И характеристик товара (#4).
-        if spec.color and colors and _canon_color(spec.color) not in colors:
+        if spec.color and _color_conflict(_canon_color(spec.color), colors):
             return False
         if spec.fuel_type and _fuel_conflict(spec.fuel_type.lower(), _product_fuels(product)):
             return False

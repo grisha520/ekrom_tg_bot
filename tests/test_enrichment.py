@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from max_ekrom_bot.matching.selector import (
     ProductSelector,
+    _color_conflict,
     _product_burners,
     _product_colors,
     _product_fuels,
@@ -52,6 +53,40 @@ def test_attribute_contradiction_dropped():
     white = _p("Духовка BOSCH HBF", {"Цвет": "Белый"}, price=120)
     ranked = sel.ranked_candidates(spec, [black, white])
     assert [c.title for c in ranked] == ["Духовка BOSCH HBF"]
+
+
+def test_color_family_conflict_logic():
+    # Оттенки одной семьи не конфликтуют; явно другой цвет — конфликтует.
+    assert _color_conflict("чёрный", {"графит"}) is False
+    assert _color_conflict("чёрный", {"антрацит"}) is False
+    assert _color_conflict("чёрный", {"белый"}) is True
+    assert _color_conflict("белый", {"графит"}) is True
+    assert _color_conflict("чёрный", set()) is False
+    assert _color_conflict("чёрный", {"чёрный"}) is False
+
+
+def test_graphite_accepted_white_rejected_for_black_request():
+    # Под «чёрную» вытяжку: графит остаётся, белая (Цвет: Белый) отсекается.
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.HOOD, color="чёрный")
+    graphite = _p("Вытяжка X", {"Цвет": "Графит"}, price=100)
+    white = _p("Вытяжка Y BLANC", {"Цвет": "Белый"}, price=120)
+    ranked = sel.ranked_candidates(spec, [graphite, white])
+    assert [c.title for c in ranked] == ["Вытяжка X"]
+
+
+def test_color_confirmed_by_title_fast_path():
+    sel = ProductSelector(segment="средний")
+    black = ProductSpec(appliance=ApplianceType.HOOD, color="чёрный")
+    # цвет виден и совместим в названии → подтверждён (страницу открывать не надо)
+    assert sel.color_confirmed_by_title(black, _p("Вытяжка Lex HOGAN 600 BLACK")) is True
+    assert sel.color_confirmed_by_title(black, _p("Вытяжка X графит")) is True
+    # цвет в названии не распознан (BLANC) → не подтверждён, нужна страница
+    assert sel.color_confirmed_by_title(black, _p("Вытяжка Monsher INNA 40 BLANC")) is False
+    # в названии другой цвет → не подтверждён
+    assert sel.color_confirmed_by_title(black, _p("Вытяжка белая")) is False
+    # цвет не запрошен → подтверждать нечего
+    assert sel.color_confirmed_by_title(ProductSpec(appliance=ApplianceType.HOOD), _p("X")) is True
 
 
 def test_width_tolerance_595_matches_600():

@@ -35,7 +35,10 @@ class PipelineResult:
 _MAX_AVAILABILITY_CHECKS = 15
 
 # Сколько позиций обрабатывать одновременно (вкладок браузера параллельно).
-_MAX_PARALLEL_SPECS = 4
+# На слабом VPS (1 vCPU) много вкладок Chromium толкаются за процессор и цены/
+# карточки не успевают отрисоваться; 2 — компромисс скорости и надёжности (в
+# паре с ожиданием текста цены в _wait_for_cards). На 2+ vCPU можно поднять до 3–4.
+_MAX_PARALLEL_SPECS = 2
 
 # Размер шортлиста для LLM-ре-ранка (#6): сколько доступных+обогащённых
 # кандидатов собираем, прежде чем отдать модели на выбор.
@@ -238,26 +241,27 @@ class Pipeline:
         return want_model, want_brand, tiers
 
     async def _first_available(self, ekrom, selector, spec, tiers, page):
-        """Первый подходящий товар в наличии по приоритету тиров (детерминированно).
+        """Первый подходящий товар по приоритету тиров (детерминированно).
 
-        Останавливаемся на первом валидном — иначе проверка открывала бы
-        страницу каждого кандидата и подбор затягивался бы на минуты.
+        Доступность оцениваем ОПТИМИСТИЧНО по данным карточки: отбрасываем только
+        товары, которые карточка ЯВНО пометила «нет в наличии». Страницу товара
+        ради статуса не открываем — на слабом сервере это медленно и ненадёжно
+        (карточки под нагрузкой не отдают статус → ложное «нет в наличии»).
+        Фактический состав всё равно перепроверяется при добавлении в корзину.
+
+        Цвет: если он подтверждён названием — доверяем карточке (быстрый путь).
+        Если нет (напр. «BLANC») — открываем страницу и валидируем по реальным
+        характеристикам; валидация снисходительна к оттенкам (графит≈чёрный), но
+        отсекает явно другой цвет.
         """
         for tier_name, group in tiers:
             for product in group[:_MAX_AVAILABILITY_CHECKS]:
                 if product.in_stock is False:
                     continue
-                available = (
-                    product.in_stock is True
-                    or await ekrom.is_product_available(product, page)
-                )
-                if not available:
-                    continue
-                # #4: обогащаем кандидата реальными характеристиками и отбрасываем
-                # выбор, если реальные данные противоречат запросу.
-                await ekrom.ensure_enriched(product, page)
-                if not selector.passes_filters(spec, product):
-                    continue
+                if not selector.color_confirmed_by_title(spec, product):
+                    await ekrom.ensure_enriched(product, page)
+                    if not selector.passes_filters(spec, product):
+                        continue
                 return product, tier_name
         return None, None
 
@@ -272,13 +276,7 @@ class Pipeline:
             for product in group[:_MAX_AVAILABILITY_CHECKS]:
                 if len(shortlist) >= _LLM_SHORTLIST_K:
                     break
-                if product.in_stock is False:
-                    continue
-                available = (
-                    product.in_stock is True
-                    or await ekrom.is_product_available(product, page)
-                )
-                if not available:
+                if product.in_stock is False:  # оптимистично: только явный OOS
                     continue
                 await ekrom.ensure_enriched(product, page)
                 if not selector.passes_filters(spec, product):

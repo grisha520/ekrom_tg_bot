@@ -297,9 +297,22 @@ class EkromClient:
         """
         page = page or self.page
         try:
-            await page.wait_for_selector(SEL_PRODUCT_CARD, timeout=6000, state="attached")
+            await page.wait_for_selector(SEL_PRODUCT_CARD, timeout=8000, state="attached")
         except Exception:  # noqa: BLE001 — пусто/не догрузилось; _collect_cards вернёт []
             return
+        # Цена догружается ПОЗЖЕ карточки (через AJAX умного фильтра, особенно под
+        # нагрузкой). Ждём не просто наличия элемента цены, а появления в нём
+        # ТЕКСТА — иначе читаем пустую цену, товар выпадает из подбора «без цены»
+        # и подбор ложно возвращает «не найдено».
+        try:
+            await page.wait_for_function(
+                "(sel) => { const e = document.querySelector(sel);"
+                " return !!e && e.textContent.trim().length > 0; }",
+                arg=SEL_PRODUCT_PRICE,
+                timeout=7000,
+            )
+        except Exception:  # noqa: BLE001 — цен может не быть в этой категории
+            pass
         await page.wait_for_timeout(300)
 
     async def _collect_cards(self, limit: int, page: Page | None = None) -> list[CatalogProduct]:

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from max_ekrom_bot.matching.selector import ProductSelector, _title_has_color
+from max_ekrom_bot.matching.selector import (
+    ProductSelector,
+    _canon_color,
+    _title_has_color,
+)
 from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
 
 
@@ -70,6 +74,25 @@ def test_select_one_returns_unmatched_when_empty():
 
 
 # ── #1 Позитивная валидация: отсев явных противоречий ────────────────────────
+
+def test_color_declension_normalized():
+    # LLM присылает цвет в роде, согласованном с техникой — нормализуем по стему.
+    assert _canon_color("чёрная") == "чёрный"
+    assert _canon_color("чёрное") == "чёрный"
+    assert _canon_color("белая") == "белый"
+    assert _canon_color("серую") == "серый"
+    assert _canon_color("нержавеющая сталь") == "нержавейка"
+
+
+def test_feminine_color_matches_masculine_product():
+    # spec.color="чёрная" должен подойти к товару «...BLACK» (в названии «чёрный»).
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.HOOD, color="чёрная")
+    black = _p("Вытяжка Lex HOGAN 600 BLACK", 100)
+    white = _p("Вытяжка Lex HOGAN 600 WHITE", 120)
+    ranked = sel.ranked_candidates(spec, [black, white])
+    assert [c.title for c in ranked] == ["Вытяжка Lex HOGAN 600 BLACK"]
+
 
 def test_contradicting_color_dropped():
     sel = ProductSelector(segment="средний")
