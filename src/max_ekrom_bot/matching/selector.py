@@ -119,6 +119,53 @@ def _fuel_conflict(want: str, have: set[str]) -> bool:
     return True
 
 
+# ── Сигналы характеристик: название + структурированные атрибуты (#4) ─────────
+# Атрибуты читаем по ключам, чтобы не путать «Тип управления: Электронное» с
+# типом нагрева. Если атрибутов нет (карточка не обогащена) — падаем на название.
+_FUEL_KEYS = ("тип духов", "вид вароч", "тип вароч", "тип нагрева", "тип плиты", "тип поверхност")
+
+
+def _attr_get(product: CatalogProduct, *key_subs: str) -> str | None:
+    """Значение первого атрибута, чьё имя содержит одну из подстрок-ключей."""
+    for k, v in (product.attributes or {}).items():
+        kl = k.lower()
+        if any(s in kl for s in key_subs):
+            return v
+    return None
+
+
+def _product_colors(product: CatalogProduct) -> set[str]:
+    text = product.title
+    cval = _attr_get(product, "цвет")
+    if cval:
+        text = f"{text} {cval}"
+    return _title_colors(text)
+
+
+def _product_fuels(product: CatalogProduct) -> set[str]:
+    fval = _attr_get(product, *_FUEL_KEYS)
+    return _title_fuel_set(fval) if fval else _title_fuel_set(product.title)
+
+
+def _product_burners(product: CatalogProduct) -> int | None:
+    bval = _attr_get(product, "конфор")
+    if bval:
+        m = re.search(r"\d+", bval)
+        if m:
+            return int(m.group())
+    return _title_burners(product.title)
+
+
+def _product_width(product: CatalogProduct) -> int | None:
+    for sub in ("ширина встраивания", "ширина"):
+        wval = _attr_get(product, sub)
+        if wval:
+            m = re.search(r"\d{2,4}", wval)
+            if m:
+                return int(m.group())
+    return _title_width_mm(product.title)
+
+
 class ProductSelector:
     def __init__(self, segment: str | None = None) -> None:
         # segment: 'эконом' → дешевле, 'премиум' → дороже, иначе → средний
@@ -162,49 +209,51 @@ class ProductSelector:
         return SelectionResult(items=items)
 
     # ── Внутреннее ───────────────────────────────────────────────────────────
+    def passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
+        """Публичная обёртка: применима для повторной валидации после обогащения."""
+        return self._passes_filters(spec, product)
+
     def _passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
-        title = f"{product.title} {' '.join(product.attributes.values())}"
+        colors = _product_colors(product)
 
-        # Жёсткие исключения по цвету («не чёрную») — отсекаем по названию.
+        # Жёсткие исключения по цвету («не чёрную»).
         for excluded in spec.exclude_colors:
-            if excluded and _title_has_color(title, excluded):
+            if excluded and _canon_color(excluded) in colors:
                 return False
 
-        # Позитивная валидация (#1): отбрасываем только при ЯВНОМ противоречии в
-        # названии (заявлен другой цвет/топливо/число конфорок). Молчание — ок.
-        if spec.color:
-            colors = _title_colors(title)
-            if colors and _canon_color(spec.color) not in colors:
-                return False
-        if spec.fuel_type:
-            if _fuel_conflict(spec.fuel_type.lower(), _title_fuel_set(title)):
-                return False
+        # Позитивная валидация (#1): отбрасываем только при ЯВНОМ противоречии
+        # (заявлен другой цвет/топливо/число конфорок). Молчание — ок. Сигналы
+        # берутся из названия И характеристик товара (#4).
+        if spec.color and colors and _canon_color(spec.color) not in colors:
+            return False
+        if spec.fuel_type and _fuel_conflict(spec.fuel_type.lower(), _product_fuels(product)):
+            return False
         if spec.burners:
-            b = _title_burners(title)
+            b = _product_burners(product)
             if b is not None and b != spec.burners:
                 return False
         return True
 
     def _attr_signals(self, spec: ProductSpec, product: CatalogProduct) -> tuple[int, int]:
-        """(совпавшие, запрошенные) характеристики, подтверждённые названием."""
-        title = f"{product.title} {' '.join(product.attributes.values())}"
+        """(совпавшие, запрошенные) характеристики по названию + атрибутам."""
         requested = 0
         matched = 0
         if spec.color:
             requested += 1
-            if _canon_color(spec.color) in _title_colors(title):
+            if _canon_color(spec.color) in _product_colors(product):
                 matched += 1
         if spec.fuel_type:
             requested += 1
-            if spec.fuel_type.lower() in _title_fuel_set(title):
+            if spec.fuel_type.lower() in _product_fuels(product):
                 matched += 1
         if spec.burners:
             requested += 1
-            if _title_burners(title) == spec.burners:
+            if _product_burners(product) == spec.burners:
                 matched += 1
         if spec.width_mm:
             requested += 1
-            if _title_width_mm(title) == spec.width_mm:
+            w = _product_width(product)
+            if w is not None and abs(w - spec.width_mm) <= 15:
                 matched += 1
         return matched, requested
 

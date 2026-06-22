@@ -365,6 +365,50 @@ class EkromClient:
         product.in_stock = True
         return True
 
+    async def read_product_properties(self, page: Page | None = None) -> dict[str, str]:
+        """Считать пары «характеристика → значение» с открытой страницы товара.
+
+        Блок характеристик ekrom — список li.product-info__property с парой
+        <p class="product-info__property-name">/<p class="..__property-value">.
+        """
+        page = page or self.page
+        names = page.locator(".product-info__property-name")
+        values = page.locator(".product-info__property-value")
+        try:
+            count = min(await names.count(), await values.count())
+        except Exception:  # noqa: BLE001
+            return {}
+        props: dict[str, str] = {}
+        for i in range(count):
+            try:
+                name = (await names.nth(i).inner_text()).strip()
+                value = (await values.nth(i).inner_text()).strip()
+            except Exception:  # noqa: BLE001
+                continue
+            if name and value:
+                props[name] = value
+        return props
+
+    async def ensure_enriched(self, product: CatalogProduct, page: Page | None = None) -> None:
+        """Догрузить характеристики товара в product.attributes (если их ещё нет).
+
+        Переиспользует уже открытую страницу товара (после проверки наличия) —
+        переходит на неё только если открыто что-то другое. Ошибки чтения не
+        критичны: остаёмся без характеристик, подбор тогда опирается на название.
+        """
+        if product.attributes:
+            return
+        page = page or self.page
+        try:
+            if product_slug(page.url) != product_slug(product.url):
+                await page.goto(product.url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(800)
+            props = await self.read_product_properties(page)
+            if props:
+                product.attributes = props
+        except Exception:  # noqa: BLE001 — обогащение не критично для потока
+            pass
+
     # ── Корзина ────────────────────────────────────────────────────────────────
     async def add_to_cart(self, product: CatalogProduct, page: Page | None = None) -> bool:
         """Открыть страницу товара и нажать кнопку «Добавить/В корзину».

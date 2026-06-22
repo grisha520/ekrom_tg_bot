@@ -143,10 +143,21 @@ class Pipeline:
             for product in group[:_MAX_AVAILABILITY_CHECKS]:
                 if product.in_stock is False:
                     continue
-                if product.in_stock is True or await ekrom.is_product_available(product, page):
-                    chosen = product
-                    chosen_tier = tier_name
-                    break
+                available = (
+                    product.in_stock is True
+                    or await ekrom.is_product_available(product, page)
+                )
+                if not available:
+                    continue
+                # #4: обогащаем кандидата реальными характеристиками со страницы
+                # товара и отбрасываем выбор, если реальные данные противоречат
+                # запросу (то, чего не было видно в названии карточки).
+                await ekrom.ensure_enriched(product, page)
+                if not selector.passes_filters(spec, product):
+                    continue
+                chosen = product
+                chosen_tier = tier_name
+                break
             if chosen is not None:
                 break
 
