@@ -5,6 +5,7 @@ from __future__ import annotations
 from max_ekrom_bot.matching.selector import (
     ProductSelector,
     _canon_color,
+    _canon_fuel,
     _title_has_color,
 )
 from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
@@ -92,6 +93,24 @@ def test_feminine_color_matches_masculine_product():
     white = _p("Вытяжка Lex HOGAN 600 WHITE", 120)
     ranked = sel.ranked_candidates(spec, [black, white])
     assert [c.title for c in ranked] == ["Вытяжка Lex HOGAN 600 BLACK"]
+
+
+def test_fuel_declension_normalized():
+    # LLM присылает топливо в роде, согласованном с техникой — нормализуем по стему.
+    assert _canon_fuel("газовый") == "газовая"
+    assert _canon_fuel("газовая") == "газовая"
+    assert _canon_fuel("электрический") == "электрическая"
+    assert _canon_fuel("индукционный") == "индукционная"
+
+
+def test_masculine_fuel_request_matches_product():
+    # spec.fuel_type="газовый" должен подойти к «газовой» панели, а «электрическую» отсечь.
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.COOKTOP, fuel_type="газовый")
+    gas = _p("Варочная панель газовая", 100)
+    electric = _p("Варочная панель электрическая", 120)
+    ranked = sel.ranked_candidates(spec, [gas, electric])
+    assert [c.title for c in ranked] == ["Варочная панель газовая"]
 
 
 def test_contradicting_color_dropped():

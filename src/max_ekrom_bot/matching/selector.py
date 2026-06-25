@@ -67,6 +67,24 @@ _CANON_COLOR: dict[str, str] = {
 # не повод выбрасывать кандидата).
 _ELECTRIC_FAMILY = {"электрическая", "индукционная"}
 
+# Нормализация топлива по стему: LLM присылает форму, согласованную с техникой
+# («панель газовая», «шкаф газовый»). Без этого подбор по топливу ломается на
+# роде/склонении — тот же класс бага, что был с цветом.
+_FUEL_STEMS: tuple[tuple[str, str], ...] = (
+    ("индукц", "индукционная"),
+    ("газ", "газовая"),
+    ("электр", "электрическая"),
+    ("комбинир", "комбинированная"),
+)
+
+
+def _canon_fuel(fuel: str) -> str:
+    f = fuel.strip().lower()
+    for stem, canon in _FUEL_STEMS:
+        if stem in f:
+            return canon
+    return f
+
 
 def _canon_color(color: str) -> str:
     """Привести цвет к каноническому ключу _COLOR_TOKENS.
@@ -284,7 +302,7 @@ class ProductSelector:
         # берутся из названия И характеристик товара (#4).
         if spec.color and _color_conflict(_canon_color(spec.color), colors):
             return False
-        if spec.fuel_type and _fuel_conflict(spec.fuel_type.lower(), _product_fuels(product)):
+        if spec.fuel_type and _fuel_conflict(_canon_fuel(spec.fuel_type), _product_fuels(product)):
             return False
         if spec.burners:
             b = _product_burners(product)
@@ -302,7 +320,7 @@ class ProductSelector:
                 matched += 1
         if spec.fuel_type:
             requested += 1
-            if spec.fuel_type.lower() in _product_fuels(product):
+            if _canon_fuel(spec.fuel_type) in _product_fuels(product):
                 matched += 1
         if spec.burners:
             requested += 1
