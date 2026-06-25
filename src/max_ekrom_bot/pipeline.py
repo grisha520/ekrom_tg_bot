@@ -367,17 +367,19 @@ class Pipeline:
             base = selector._explain(spec, chosen, ranked)
         req_label = " ".join(x for x in [spec.brand, spec.model] if x).strip()
 
-        # Замена по модели: просили конкретную модель, но взяли не её.
+        # Замена по модели: просили конкретную модель, но взяли не её. Точную
+        # причину (нет в наличии / нет на сайте) мы не всегда знаем, поэтому
+        # формулируем аккуратно — «не найдена среди доступных».
         if want_model and chosen_tier != "exact":
             same = " (тот же бренд)" if chosen_tier == "brand" else ""
             return (
-                f"Запрошено «{req_label}» — нет в наличии. "
+                f"Запрошенная модель «{req_label}» не найдена среди доступных на ekrom. "
                 f"Предложена замена{same}. {base}"
             )
         # Замена по бренду: просили только бренд, но взяли другой бренд.
         if want_brand and not want_model and chosen_tier == "rest":
             return (
-                f"Запрошен бренд «{spec.brand}» — нет в наличии. "
+                f"Бренд «{spec.brand}» не найден среди доступных на ekrom. "
                 f"Предложена замена. {base}"
             )
         # Запрошенная модель найдена и в наличии — отметим это явно.
