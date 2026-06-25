@@ -1,0 +1,477 @@
+[
+  {
+    "url": "/catalog/klimaticheskaya_tekhnika/obogrevateli/",
+    "name": "Обогреватели",
+    "path": "Климатическая техника"
+  },
+  {
+    "url": "/catalog/klimaticheskaya_tekhnika/ochistiteli_vozdukha/",
+    "name": "Очистители воздуха",
+    "path": "Климатическая техника"
+  },
+  {
+    "url": "/catalog/klimaticheskaya_tekhnika/split_sistemy/",
+    "name": "Сплит-системы",
+    "path": "Климатическая техника"
+  },
+  {
+    "url": "/catalog/klimaticheskaya_tekhnika/ventilyatory/",
+    "name": "Вентиляторы",
+    "path": "Климатическая техника"
+  },
+  {
+    "url": "/catalog/klimaticheskaya_tekhnika/vodonagrevateli/",
+    "name": "Водонагреватели",
+    "path": "Климатическая техника"
+  },
+  {
+    "url": "/catalog/krasota_i_zdorove/ukladka_i_sushka_volos/",
+    "name": "Укладка и сушка волос",
+    "path": "Красота и здоровье"
+  },
+  {
+    "url": "/catalog/krasota_i_zdorove/vesy_napolnye/",
+    "name": "Весы напольные",
+    "path": "Красота и здоровье"
+  },
+  {
+    "url": "/catalog/mbt/aerogrili/",
+    "name": "Аэрогрили",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/blendery/",
+    "name": "Блендеры",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/chayniki/",
+    "name": "Чайники",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/grili/",
+    "name": "Грили",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/izmelchiteli_produktov/",
+    "name": "Измельчители продуктов",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/khlebopechi/",
+    "name": "Хлебопечи",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/kofemolki/",
+    "name": "Кофемолки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/kukhonnye_kombayny/",
+    "name": "Кухонные комбайны",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/miksery/",
+    "name": "Миксеры",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/mini_pechi/",
+    "name": "Мини-печи",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/multivarki/",
+    "name": "Мультиварки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/myasorubki/",
+    "name": "Мясорубки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/nastolnye_plitki/",
+    "name": "Настольные плитки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/ovoshcherezki/",
+    "name": "Овощерезки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/parovarki/",
+    "name": "Пароварки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/sokovyzhimalki/",
+    "name": "Соковыжималки",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/termopoty/",
+    "name": "Термопоты",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/tostery/",
+    "name": "Тостеры",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/vafelnitsy/",
+    "name": "Вафельницы",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/vesy/",
+    "name": "Весы",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/mbt/vspenivateli_moloka/",
+    "name": "Вспениватели молока",
+    "path": "МБТ"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/kulery_dlya_vody/",
+    "name": "Кулеры для воды",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/paroochistiteli/",
+    "name": "Пароочистители",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/parovye_shvabry/",
+    "name": "Паровые швабры",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/pylesosy/",
+    "name": "Пылесосы",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/rozetki/",
+    "name": "Розетки",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/rozetki/setevye_filtry/",
+    "name": "Сетевые фильтры",
+    "path": "Техника для дома / Розетки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/rozetki/vstraivaemye_rozetki/",
+    "name": "Встраиваемые розетки",
+    "path": "Техника для дома / Розетки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/televizory/",
+    "name": "Телевизоры",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_doma/umnye_zamki_1/",
+    "name": "Умные замки",
+    "path": "Техника для дома"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/degidratory/",
+    "name": "Дегидраторы",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/dukhovye_shkafy/",
+    "name": "Духовые шкафы",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/dukhovye_shkafy/elektricheskie_duhovye_shkafy/",
+    "name": "Электрические",
+    "path": "Техника для кухни / Духовые шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/dukhovye_shkafy/gazovye_duhovye_shkafy/",
+    "name": "Газовые",
+    "path": "Техника для кухни / Духовые шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/dukhovye_shkafy/parovye_shkafy_1/",
+    "name": "Паровые шкафы",
+    "path": "Техника для кухни / Духовые шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/dukhovye_shkafy/s_svch_duhovye_shkafy/",
+    "name": "с СВЧ",
+    "path": "Техника для кухни / Духовые шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kholodilniki/",
+    "name": "Холодильники",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kholodilniki/dlya_khraneniya_sigar/",
+    "name": "Для хранения сигар",
+    "path": "Техника для кухни / Холодильники"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kholodilniki/mini_bar/",
+    "name": "Мини-бар",
+    "path": "Техника для кухни / Холодильники"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kholodilniki/otdelnostoyashchie_holodilniki/",
+    "name": "Отдельностоящие",
+    "path": "Техника для кухни / Холодильники"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kholodilniki/poluvstraivaemye/",
+    "name": "Полувстраиваемые",
+    "path": "Техника для кухни / Холодильники"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kholodilniki/vstraivaemye_holodilniki/",
+    "name": "Встраиваемые",
+    "path": "Техника для кухни / Холодильники"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kofemashiny/",
+    "name": "Кофемашины",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kofemashiny/otdelnostoyashchie-kofemashiny/",
+    "name": "Кофемашины соло и кофеварки",
+    "path": "Техника для кухни / Кофемашины"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kofemashiny/vstraivaemye-kofemashiny/",
+    "name": "Встраиваемые",
+    "path": "Техника для кухни / Кофемашины"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_plity/",
+    "name": "Кухонные плиты",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/",
+    "name": "Вытяжки",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/kupolnye_vytyazhki/",
+    "name": "Купольные",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/naklonnye_vytyazhki/",
+    "name": "Наклонные",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/nastennye_tubusy_vytyazhki/",
+    "name": "Настенные-тубусы",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/ostrovnye_vytyazhki/",
+    "name": "Островные",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/ploskie_vytyazhki/",
+    "name": "Плоские",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/polnovstraivaemye_vytyazhki/",
+    "name": "Полновстраиваемые",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/potolochnye/",
+    "name": "Потолочные",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/t_obraznye_vytyazhki/",
+    "name": "Т-образные",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/vstraivaemye_vytyazhki/",
+    "name": "Встраиваемые",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/kukhonnye_vytyazhki/vytyazhki_v_stoleshnitsu/",
+    "name": "В столешницу",
+    "path": "Техника для кухни / Вытяжки"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/mikrovolnovye_pechi/",
+    "name": "Микроволновые печи",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/mikrovolnovye_pechi/otdelnostoyashchie_mikrovolnovye_pechi/",
+    "name": "Отдельностоящие",
+    "path": "Техника для кухни / Микроволновые печи"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/mikrovolnovye_pechi/vstraivaemye_mikrovolnovye_pechi/",
+    "name": "Встраиваемые",
+    "path": "Техника для кухни / Микроволновые печи"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/morozilnye_kamery/",
+    "name": "Морозильные камеры",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/podogrevatel_posudy/",
+    "name": "Подогреватели посуды",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/posudomoechnye_mashiny/",
+    "name": "Посудомоечные машины",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/posudomoechnye_mashiny/otdelnostoyashchie_posudomoyki/",
+    "name": "Отдельностоящие",
+    "path": "Техника для кухни / Посудомоечные машины"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/posudomoechnye_mashiny/vstraivaemye_posudomoyki/",
+    "name": "Встраиваемые",
+    "path": "Техника для кухни / Посудомоечные машины"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/",
+    "name": "Варочные панели",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/elektricheskie_varochnye_paneli/",
+    "name": "Электрические",
+    "path": "Техника для кухни / Варочные панели"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/gazovye_varochnye_paneli/",
+    "name": "Газовые",
+    "path": "Техника для кухни / Варочные панели"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/induktsionnye_varochnye_paneli/",
+    "name": "Индукционные",
+    "path": "Техника для кухни / Варочные панели"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/kombinirovannye_varochnye_paneli/",
+    "name": "Комбинированные",
+    "path": "Техника для кухни / Варочные панели"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/so_vstroennoy_vytyazhkoy_varochnye_paneli/",
+    "name": "Со встроенной вытяжкой",
+    "path": "Техника для кухни / Варочные панели"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/varochnye_paneli/teppan_yaki/",
+    "name": "Теппан яки",
+    "path": "Техника для кухни / Варочные панели"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/vinnye_shkafy/",
+    "name": "Винные шкафы",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/vinnye_shkafy/kombinirovannye_vinnye_shkafy/",
+    "name": "Комбинированные",
+    "path": "Техника для кухни / Винные шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/vinnye_shkafy/otdelnostoyashchie_vinnye_shkafy/",
+    "name": "Отдельностоящие",
+    "path": "Техника для кухни / Винные шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/vinnye_shkafy/vstraivaemye_vinnye_shkafy/",
+    "name": "Встраиваемые",
+    "path": "Техника для кухни / Винные шкафы"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_kukhni/yashchiki_dlya_vakuumirovaniya/",
+    "name": "Ящики для вакуумирования",
+    "path": "Техника для кухни"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/domashnyaya_prachechnaya_asko/",
+    "name": "Домашняя прачечная ASKO",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/gladilnye_sistemy/",
+    "name": "Гладильные системы",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/komplekt_stiralnaya_mashina_sushilnaya_mashina/",
+    "name": "Стиральная + сушильная машина",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/otparivateli/",
+    "name": "Отпариватели",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/parogeneratory/",
+    "name": "Парогенераторы",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/parovye_shkafy/",
+    "name": "Паровые шкафы",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/stiralnye_mashiny/",
+    "name": "Стиральные машины",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/stiralnye_mashiny/otdelnostoyashchie_stiralnye_mashiny/",
+    "name": "Отдельностоящие",
+    "path": "Техника для ухода за одеждой / Стиральные машины"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/stiralnye_mashiny/vstraivaemye_stiralnye_mashiny/",
+    "name": "Встраиваемые",
+    "path": "Техника для ухода за одеждой / Стиральные машины"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/sushilnye_mashiny/",
+    "name": "Сушильные машины",
+    "path": "Техника для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/sushilnye_shkafy/",
+    "name": "Сушильные шкафы",
+    "path": "Техника для ухода за одеждой"
+  }
+]
