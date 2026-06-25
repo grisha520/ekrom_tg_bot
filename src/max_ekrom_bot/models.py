@@ -63,8 +63,28 @@ class ProductSpec(BaseModel):
 
     @field_validator("extra", mode="before")
     @classmethod
-    def _none_to_empty_dict(cls, v: object) -> object:
-        return {} if v is None else v
+    def _coerce_extra(cls, v: object) -> object:
+        # LLM кладёт в extra и нестроковые значения (например {"slots": 2}) —
+        # приводим ключи/значения к строкам, иначе dict[str, str] падает.
+        if v is None:
+            return {}
+        if isinstance(v, dict):
+            return {str(k): str(val) for k, val in v.items()}
+        return v
+
+    @field_validator("appliance", mode="before")
+    @classmethod
+    def _coerce_appliance(cls, v: object) -> object:
+        # Незнакомый тип (LLM на расширенном каталоге может прислать «kettle»,
+        # «blender»…) приводим к UNKNOWN — категорию дальше выберет резолвер.
+        if isinstance(v, ApplianceType):
+            return v
+        if isinstance(v, str):
+            try:
+                return ApplianceType(v.strip().lower())
+            except ValueError:
+                return ApplianceType.UNKNOWN
+        return ApplianceType.UNKNOWN
 
 
 class CustomerRequest(BaseModel):

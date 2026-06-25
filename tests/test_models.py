@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from max_ekrom_bot.models import (
+    ApplianceType,
     CatalogProduct,
     CustomerRequest,
     MatchedItem,
@@ -16,6 +17,18 @@ def test_spec_none_coerced_to_empty_collections():
     spec = ProductSpec.model_validate({"exclude_colors": None, "extra": None})
     assert spec.exclude_colors == []
     assert spec.extra == {}
+
+
+def test_extra_coerces_nonstring_values():
+    # LLM кладёт в extra числа/булевы — не должно падать (как было «Тостер slots:2»).
+    spec = ProductSpec.model_validate({"raw_text": "Тостер", "extra": {"slots": 2, "f": True}})
+    assert spec.extra == {"slots": "2", "f": "True"}
+
+
+def test_unknown_appliance_string_coerced_to_unknown():
+    assert ProductSpec.model_validate({"appliance": "blender"}).appliance is ApplianceType.UNKNOWN
+    assert ProductSpec.model_validate({"appliance": "oven"}).appliance is ApplianceType.OVEN
+    assert ProductSpec.model_validate({"appliance": None}).appliance is ApplianceType.UNKNOWN
 
 
 def test_request_none_specs_coerced_to_empty_list():
