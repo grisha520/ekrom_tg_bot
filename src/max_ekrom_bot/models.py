@@ -34,6 +34,11 @@ class ProductSpec(BaseModel):
     appliance: ApplianceType = ApplianceType.UNKNOWN
     raw_text: str = ""
 
+    # Категория каталога ekrom, выбранная моделью из data/categories.json
+    # (расширение подбора за пределы 6 встроенных типов).
+    category_url: Optional[str] = None
+    category_name: Optional[str] = None
+
     brand: Optional[str] = Field(default=None, description="Бренд/производитель, если указан (Korting, Bosch…)")
     model: Optional[str] = Field(default=None, description="Конкретная модель/артикул, если указан (OGG 771 CFX)")
 

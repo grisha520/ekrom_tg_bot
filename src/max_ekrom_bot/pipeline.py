@@ -17,7 +17,14 @@ from .config import Settings, get_settings
 from .ekrom.catalog import build_category_url, category_for
 from .ekrom.client import EkromAuthError, EkromCartError, EkromClient, product_slug
 from .matching import ProductSelector
-from .models import CatalogProduct, CustomerRequest, MatchedItem, ProductSpec, SelectionResult
+from .models import (
+    ApplianceType,
+    CatalogProduct,
+    CustomerRequest,
+    MatchedItem,
+    ProductSpec,
+    SelectionResult,
+)
 from .parsing import get_parser
 from .parsing.factory import Parser
 
@@ -122,6 +129,7 @@ class Pipeline:
         self._settings = settings or get_settings()
         self._parser = parser or get_parser(self._settings)
         self._llm = None  # ленивый LLM-провайдер для ре-ранка (#6)
+        self._resolver = None  # ленивый резолвер категорий
 
     def _get_llm(self):
         if self._llm is None:
@@ -130,9 +138,26 @@ class Pipeline:
             self._llm = get_llm_provider(self._settings)
         return self._llm
 
+    def _get_resolver(self):
+        if self._resolver is None:
+            from .parsing.category_resolver import CategoryResolver
+
+            self._resolver = CategoryResolver(settings=self._settings)
+        return self._resolver
+
     def parse_message(self, message: str) -> CustomerRequest:
-        """Разобрать текст клиента в структурированный запрос (только LLM, без сети сайта)."""
-        return self._parser.parse(message)
+        """Разобрать текст клиента в структурированный запрос (только LLM, без сети сайта).
+
+        Для позиций, не легших в 6 встроенных типов, дополнительно выбираем
+        категорию каталога моделью (расширение на весь каталог).
+        """
+        request = self._parser.parse(message)
+        if any(s.appliance is ApplianceType.UNKNOWN for s in request.specs):
+            try:
+                self._get_resolver().resolve(request.specs)
+            except Exception:  # noqa: BLE001 — выбор категории не критичен
+                logger.warning("выбор категории не удался", exc_info=True)
+        return request
 
     async def select_products(self, request: CustomerRequest) -> SelectionResult:
         """Найти и подобрать товары под каждую позицию запроса (параллельно).
@@ -361,12 +386,17 @@ class Pipeline:
         return base
 
     async def _candidates_for_spec(self, ekrom: EkromClient, spec, page=None) -> list:
-        """Кандидаты под позицию: сначала с фильтрами, при пустом результате —
-        ослабляем до категории без фильтров. Если указан бренд/модель —
-        дополняем выдачу прямым поиском, чтобы точная модель не потерялась."""
+        """Кандидаты под позицию (гибрид):
+
+        - известный из 6 типов → смарт-фильтр Bitrix (быстро), откат к категории
+          без фильтров при пустой выдаче;
+        - иначе категория, выбранная моделью (расширение каталога) → общий обход;
+        - иначе текстовый поиск как последний вариант.
+        Если указан бренд/модель — дополняем выдачу прямым поиском.
+        """
         base = self._settings.ekrom_base_url
         candidates: list = []
-        filtered_url = build_category_url(base, spec)
+        filtered_url = build_category_url(base, spec)  # не None только для 6 типов
         if filtered_url:
             candidates = await ekrom.browse_url(filtered_url, page=page)
             if not candidates:
@@ -374,6 +404,10 @@ class Pipeline:
                 category = category_for(spec.appliance)
                 if category:
                     candidates = await ekrom.browse_category(category, page=page)
+        elif spec.category_url:
+            # категория выбрана моделью — идём в неё (фильтруем уже клиентски)
+            url = base.rstrip("/") + spec.category_url
+            candidates = await ekrom.browse_url(url, page=page)
         else:
             # категории нет — текстовый поиск как последний вариант
             candidates = await ekrom.search(spec.raw_text or spec.appliance.value, page=page)
