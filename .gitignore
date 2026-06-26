@@ -31,3 +31,7 @@ data/downloads/
 .DS_Store
 .idea/
 .vscode/
+
+# Build artifacts / throwaway
+_pres/
+scripts/_*.py
