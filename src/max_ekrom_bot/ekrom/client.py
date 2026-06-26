@@ -281,13 +281,59 @@ class EkromClient:
     async def search(
         self, query: str, limit: int = 20, page: Page | None = None
     ) -> list[CatalogProduct]:
-        """Поиск по строке сайта (fallback). На ekrom отдаёт мало карточек —
-        предпочтительнее browse_category()."""
+        """Поиск по строке сайта.
+
+        Результаты ekrom отдаёт блоками .search-item (название + ссылка), БЕЗ цены
+        и наличия — их при необходимости дочитывают через fetch_product_details().
+        """
         page = page or self.page
         url = build_search_url(self._settings.ekrom_base_url, query)
         await page.goto(url, wait_until="domcontentloaded")
-        await self._wait_for_cards(page)
-        return await self._collect_cards(limit, page)
+        try:
+            await page.wait_for_selector(".search-item", timeout=5000, state="attached")
+        except Exception:  # noqa: BLE001 — ничего не найдено
+            return []
+        links = page.locator(".search-item h4 a")
+        count = min(await links.count(), limit)
+        products: list[CatalogProduct] = []
+        for i in range(count):
+            a = links.nth(i)
+            try:
+                title = (await a.inner_text()).strip()
+                href = await a.get_attribute("href")
+            except Exception:  # noqa: BLE001
+                continue
+            if title and href:
+                products.append(CatalogProduct(title=title, url=self._abs_url(href)))
+        return products
+
+    async def fetch_product_details(
+        self, product: CatalogProduct, page: Page | None = None
+    ) -> None:
+        """Дочитать цену и наличие со страницы товара (для результатов поиска).
+
+        Результаты поиска приходят без цены/наличия; чтобы такой товар мог попасть
+        в подбор, открываем его страницу и читаем основную цену (p.price) и статус.
+        Наличие оптимистичное: «Под заказ»/неизвестно → доступен (как и в подборе).
+        """
+        page = page or self.page
+        try:
+            if product_slug(page.url) != product_slug(product.url):
+                await page.goto(product.url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(800)
+            if product.price is None:
+                price_el = page.locator("p.price").first
+                if await price_el.count():
+                    product.price = _parse_price(await price_el.inner_text())
+            if product.in_stock is None:
+                parsed = await _read_availability(page.locator(".js-detail").first)
+                if parsed is None:
+                    parsed = await _read_availability(page)
+                product.in_stock = parsed if parsed is not None else True
+            if not product.attributes:
+                product.attributes = await self.read_product_properties(page)
+        except Exception:  # noqa: BLE001 — деталь не критична; без цены товар отсеется
+            pass
 
     async def _wait_for_cards(self, page: Page | None = None) -> None:
         """Дождаться появления карточек товаров вместо фиксированной паузы.

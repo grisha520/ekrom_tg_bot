@@ -41,6 +41,10 @@ class PipelineResult:
 # Сколько кандидатов максимум проверять на странице товара (остальные — слишком медленно).
 _MAX_AVAILABILITY_CHECKS = 15
 
+# Сколько страниц товаров максимум открывать при поиске точной модели (за ценой/
+# наличием). Ограничивает добавочное время для запросов с конкретным артикулом.
+_MAX_MODEL_FETCHES = 3
+
 # Сколько позиций обрабатывать одновременно (вкладок браузера параллельно).
 # Нагрузка сетевая (вкладки ждут ответ ekrom), поэтому держим выше числа ядер —
 # ограничение теперь RAM (вкладка Chromium ~0.1–0.2 ГБ). На 2 vCPU / 4 ГБ — 6
@@ -414,16 +418,25 @@ class Pipeline:
             # категории нет — текстовый поиск как последний вариант
             candidates = await ekrom.search(spec.raw_text or spec.appliance.value, page=page)
 
-        # Дополняем кандидатов прямым поиском по бренду/модели: точной модели
-        # может не быть в первых карточках категории.
-        query = " ".join(x for x in [spec.brand, spec.model] if x).strip()
-        if query:
+        # Если указана конкретная модель — ищем её прямым поиском по сайту и
+        # дочитываем цену/наличие со страниц совпавших товаров (точной модели
+        # часто нет в первых карточках категории). Бренд без модели не ищем —
+        # его закрывает тир «тот же бренд» из категории.
+        tokens = _model_tokens(spec.model)
+        if tokens:
+            query = " ".join(x for x in [spec.brand, spec.model] if x).strip()
             try:
                 found = await ekrom.search(query, page=page)
-            except Exception:  # noqa: BLE001 — поиск не критичен, идём с тем, что есть
+            except Exception:  # noqa: BLE001 — поиск не критичен
                 found = []
             seen = {c.url for c in candidates}
-            candidates += [c for c in found if c.url not in seen]
+            matches = [
+                c for c in found
+                if c.url not in seen and _title_matches_model(c.title, tokens)
+            ][:_MAX_MODEL_FETCHES]
+            for product in matches:
+                await ekrom.fetch_product_details(product, page)
+            candidates += [c for c in matches if c.price is not None]
         return candidates
 
     async def is_ekrom_authenticated(self) -> bool:
