@@ -39,6 +39,7 @@ from pydantic import ValidationError
 
 from .config import Settings, get_settings
 from .ekrom.client import EkromAuthError, EkromCartError
+from .managers import ManagerStore
 from .messenger.telegram_format import format_selection
 from .models import SelectionResult
 from .pipeline import Pipeline
@@ -87,11 +88,38 @@ def _format_ekrom_error(exc: Exception) -> str:
     return f"❌ Ошибка ekrom/браузера:\n<code>{short}</code>"
 
 
+_MANAGERS: ManagerStore | None = None
+
+
+def _managers() -> ManagerStore:
+    """Хранилище менеджеров (правится из бота). Сидится из .env при первом запуске."""
+    global _MANAGERS
+    if _MANAGERS is None:
+        s = get_settings()
+        _MANAGERS = ManagerStore(s.managers_store_path)
+        _MANAGERS.seed(s.allowed_telegram_user_ids)
+    return _MANAGERS
+
+
+def _is_admin(user_id: int | None) -> bool:
+    return user_id is not None and user_id in get_settings().admin_user_ids
+
+
 def _user_allowed(user_id: int | None) -> bool:
     if user_id is None:
         return False
-    allowed = get_settings().allowed_telegram_user_ids
-    return user_id in allowed
+    return _managers().contains(user_id) or _is_admin(user_id)
+
+
+# Запросы доступа, о которых уже уведомили админов (чтобы не спамить), и подписи
+# к ним для кнопки «Добавить».
+_ACCESS_REQUESTED: set[int] = set()
+_REQUEST_LABELS: dict[int, str] = {}
+
+
+def _user_label(user) -> str:
+    uname = f"@{user.username}" if user.username else "без username"
+    return f"{user.full_name} ({uname}, id={user.id})"
 
 
 class AccessLogMiddleware(BaseMiddleware):
@@ -134,33 +162,58 @@ def _chat_lock(chat_id: int) -> asyncio.Lock:
 def _deny_message() -> str:
     return (
         "⛔ Доступ запрещён.\n\n"
-        "Этот бот только для менеджеров ekrom. "
-        "Если вам нужен доступ — попросите администратора добавить ваш Telegram user_id "
-        "в TELEGRAM_ALLOWED_IDS."
+        "Этот бот только для менеджеров ekrom. Запрос на доступ отправлен "
+        "администратору — он подтвердит его в один тап."
     )
+
+
+async def _deny(message: Message) -> None:
+    """Отказать в доступе и уведомить админов с кнопкой «✅ Добавить» (один раз)."""
+    await message.answer(_deny_message())
+    user = message.from_user
+    if user is None or user.id in _ACCESS_REQUESTED:
+        return
+    _ACCESS_REQUESTED.add(user.id)
+    _REQUEST_LABELS[user.id] = _user_label(user)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Добавить", callback_data=f"addmgr:{user.id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"denymgr:{user.id}"),
+    ]])
+    for admin_id in get_settings().admin_user_ids:
+        try:
+            await message.bot.send_message(
+                admin_id, f"🔔 Запрос доступа к боту:\n{_REQUEST_LABELS[user.id]}",
+                reply_markup=kb,
+            )
+        except Exception:  # noqa: BLE001 — не удалось уведомить одного админа
+            logger.warning("не удалось уведомить админа %s", admin_id, exc_info=True)
 
 
 # Кнопки постоянной клавиатуры (нажатие шлёт этот текст — ловим его в handle_text).
 BTN_STATUS = "🔁 Проверить вход"
 BTN_LOGIN = "🔐 Обновить вход"
 BTN_HELP = "ℹ️ Как пользоваться"
+BTN_MANAGERS = "👥 Менеджеры"
 
 
-def _main_keyboard() -> ReplyKeyboardMarkup:
-    """Постоянная клавиатура под полем ввода — работа кнопками, без команд."""
+def _main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура под полем ввода. Админу добавляется «👥 Менеджеры»."""
+    rows = [
+        [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_LOGIN)],
+        [KeyboardButton(text=BTN_HELP)],
+    ]
+    if is_admin:
+        rows.append([KeyboardButton(text=BTN_MANAGERS)])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_LOGIN)],
-            [KeyboardButton(text=BTN_HELP)],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Вставьте сообщение клиента…",
     )
 
 
-def _help_text() -> str:
-    return (
+def _help_text(is_admin: bool = False) -> str:
+    text = (
         "<b>Подбор техники ekrom</b>\n\n"
         "📋 Просто пришлите сообщение клиента (списком позиций) — бот подберёт "
         "товары и покажет превью с ценами. Затем нажмите кнопку "
@@ -168,9 +221,51 @@ def _help_text() -> str:
         "Кнопки под полем ввода:\n"
         f"{BTN_STATUS} — проверить сессию ekrom\n"
         f"{BTN_LOGIN} — обновить вход в ekrom\n"
-        f"{BTN_HELP} — эта справка\n\n"
-        "Подбор занимает ~30 с, PDF ещё ~30 с."
+        f"{BTN_HELP} — эта справка\n"
     )
+    if is_admin:
+        text += (
+            f"{BTN_MANAGERS} — список менеджеров, добавить/удалить\n"
+            "\n<i>Когда новый человек напишет боту — вам придёт кнопка «Добавить».</i>\n"
+        )
+    return text + "\nПодбор занимает ~30 с, PDF ещё ~30 с."
+
+
+def _managers_view() -> tuple[str, InlineKeyboardMarkup | None]:
+    """Текст списка менеджеров + инлайн-кнопки удаления для каждого."""
+    items = _managers().items()
+    lines = [f"👥 <b>Менеджеров: {len(items)}</b>", ""]
+    rows: list[list[InlineKeyboardButton]] = []
+    for uid, label in sorted(items.items()):
+        lines.append(f"• {label}")
+        rows.append([InlineKeyboardButton(
+            text=f"➖ Удалить {label[:28]}", callback_data=f"delmgr:{uid}"
+        )])
+    lines += [
+        "",
+        "➕ <i>Добавить:</i> пусть человек напишет боту (вам придёт кнопка), "
+        "или пришлите его числовой user_id.",
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    return "\n".join(lines), kb
+
+
+async def _show_managers(message: Message) -> None:
+    text, kb = _managers_view()
+    await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def _ask_add(message: Message, uid: int) -> None:
+    """Спросить подтверждение добавления менеджера по присланному user_id."""
+    if _managers().contains(uid):
+        await message.answer(f"✅ id={uid} уже в списке менеджеров.")
+        return
+    _REQUEST_LABELS.setdefault(uid, str(uid))
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Добавить", callback_data=f"addmgr:{uid}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"denymgr:{uid}"),
+    ]])
+    await message.answer(f"Добавить менеджера id={uid}?", reply_markup=kb)
 
 
 def _pdf_keyboard(token: str) -> InlineKeyboardMarkup:
@@ -182,17 +277,19 @@ def _pdf_keyboard(token: str) -> InlineKeyboardMarkup:
 
 
 async def cmd_start(message: Message) -> None:
-    if not _user_allowed(message.from_user and message.from_user.id):
-        await message.answer(_deny_message())
+    uid = message.from_user.id if message.from_user else None
+    if not _user_allowed(uid):
+        await _deny(message)
         return
+    admin = _is_admin(uid)
     await message.answer(
-        _help_text(), parse_mode=ParseMode.HTML, reply_markup=_main_keyboard()
+        _help_text(admin), parse_mode=ParseMode.HTML, reply_markup=_main_keyboard(admin)
     )
 
 
 async def cmd_status(message: Message) -> None:
-    if not _user_allowed(message.from_user and message.from_user.id):
-        await message.answer(_deny_message())
+    if not _user_allowed(message.from_user.id if message.from_user else None):
+        await _deny(message)
         return
     status = await message.answer("⏳ Проверяю сессию ekrom…")
     pipeline = Pipeline(get_settings())
@@ -214,8 +311,8 @@ async def cmd_status(message: Message) -> None:
 
 
 async def cmd_login(message: Message) -> None:
-    if not _user_allowed(message.from_user and message.from_user.id):
-        await message.answer(_deny_message())
+    if not _user_allowed(message.from_user.id if message.from_user else None):
+        await _deny(message)
         return
     status = await message.answer(
         "⏳ Проверяю вход в ekrom…\n<i>Может занять до 30 с.</i>",
@@ -244,8 +341,9 @@ async def cmd_login(message: Message) -> None:
 async def handle_text(message: Message) -> None:
     if not message.text or not message.chat:
         return
-    if not _user_allowed(message.from_user and message.from_user.id):
-        await message.answer(_deny_message())
+    uid = message.from_user.id if message.from_user else None
+    if not _user_allowed(uid):
+        await _deny(message)
         return
 
     # Нажатия кнопок постоянной клавиатуры приходят как обычный текст — разводим
@@ -260,6 +358,13 @@ async def handle_text(message: Message) -> None:
     if text == BTN_HELP:
         await cmd_start(message)
         return
+    admin = _is_admin(uid)
+    if admin and text == BTN_MANAGERS:
+        await _show_managers(message)
+        return
+    if admin and text.isdigit():
+        await _ask_add(message, int(text))
+        return
 
     chat_id = message.chat.id
     lock = _chat_lock(chat_id)
@@ -272,7 +377,7 @@ async def handle_text(message: Message) -> None:
             "⏳ Разбираю запрос и подбираю товары на ekrom…\n"
             "<i>Обычно 30 секунд.</i>",
             parse_mode=ParseMode.HTML,
-            reply_markup=_main_keyboard(),
+            reply_markup=_main_keyboard(admin),
         )
         pipeline = Pipeline(get_settings())
 
@@ -381,6 +486,55 @@ async def callback_pdf(callback: CallbackQuery) -> None:
         )
 
 
+async def callback_manage(callback: CallbackQuery) -> None:
+    """Админские действия по инлайн-кнопкам: добавить/удалить/отклонить менеджера."""
+    if not _is_admin(callback.from_user.id if callback.from_user else None):
+        await callback.answer("Только для администратора", show_alert=True)
+        return
+    try:
+        action, raw_id = (callback.data or "").split(":", 1)
+        uid = int(raw_id)
+    except ValueError:
+        await callback.answer()
+        return
+
+    if action == "addmgr":
+        label = _REQUEST_LABELS.get(uid, str(uid))
+        added = _managers().add(uid, label)
+        _ACCESS_REQUESTED.discard(uid)
+        await callback.answer("Добавлен" if added else "Уже в списке")
+        try:
+            await callback.message.edit_text(
+                f"✅ Менеджер добавлен: {label}" if added else f"✅ {label} уже был в списке."
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        if added:
+            try:
+                await callback.bot.send_message(
+                    uid, "✅ Вам выдан доступ к боту. Нажмите /start, чтобы начать."
+                )
+            except Exception:  # noqa: BLE001 — пользователь мог не открывать чат с ботом
+                pass
+    elif action == "delmgr":
+        removed = _managers().remove(uid)
+        await callback.answer("Удалён" if removed else "Не найден")
+        text, kb = _managers_view()
+        try:
+            await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:  # noqa: BLE001
+            pass
+    elif action == "denymgr":
+        _ACCESS_REQUESTED.discard(uid)
+        await callback.answer("Отклонено")
+        try:
+            await callback.message.edit_text("❌ Запрос на доступ отклонён.")
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        await callback.answer()
+
+
 def _make_bot(settings: Settings) -> Bot:
     """Создать Bot; при необходимости — через прокси (VPN/локальный SOCKS)."""
     proxy = (settings.telegram_proxy or "").strip()
@@ -430,6 +584,10 @@ def _build_dispatcher() -> Dispatcher:
     dp.message.register(cmd_login, Command("login"))
     dp.message.register(handle_text, F.text & ~F.text.startswith("/"))
     dp.callback_query.register(callback_pdf, F.data.startswith("pdf:"))
+    dp.callback_query.register(
+        callback_manage,
+        lambda q: bool(q.data) and q.data.split(":", 1)[0] in {"addmgr", "delmgr", "denymgr"},
+    )
     return dp
 
 

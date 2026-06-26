@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Прокси для api.telegram.org (если без VPN не подключается), напр.:
     # socks5://127.0.0.1:10808  или  http://127.0.0.1:8080
     telegram_proxy: str = Field(default="", alias="TELEGRAM_PROXY")
+    # Telegram user_id админов через запятую — кто может добавлять/удалять
+    # менеджеров прямо из бота. Если пусто — управление менеджерами выключено.
+    telegram_admin_ids: str = Field(default="", alias="TELEGRAM_ADMIN_IDS")
 
     # LLM
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
@@ -57,17 +60,28 @@ class Settings(BaseSettings):
     output_dir: str = Field(default="data/out", alias="OUTPUT_DIR")
     require_confirmation: bool = Field(default=True, alias="REQUIRE_CONFIRMATION")
 
-    @property
-    def allowed_telegram_user_ids(self) -> frozenset[int]:
-        raw = (self.telegram_allowed_ids or "").strip()
-        if not raw:
-            return frozenset()
+    @staticmethod
+    def _parse_ids(raw: str) -> frozenset[int]:
         ids: set[int] = set()
-        for part in raw.split(","):
+        for part in (raw or "").split(","):
             part = part.strip()
             if part:
                 ids.add(int(part))
         return frozenset(ids)
+
+    @property
+    def allowed_telegram_user_ids(self) -> frozenset[int]:
+        """Стартовый список менеджеров из .env (сид для data/managers.json)."""
+        return self._parse_ids(self.telegram_allowed_ids)
+
+    @property
+    def admin_user_ids(self) -> frozenset[int]:
+        """Кто может управлять менеджерами из бота."""
+        return self._parse_ids(self.telegram_admin_ids)
+
+    @property
+    def managers_store_path(self) -> Path:
+        return REPO_ROOT / "data" / "managers.json"
 
     @property
     def storage_state_path(self) -> Path:

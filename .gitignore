@@ -35,3 +35,6 @@ data/downloads/
 # Build artifacts / throwaway
 _pres/
 scripts/_*.py
+
+# Runtime manager allowlist (instance data)
+data/managers.json
