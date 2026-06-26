@@ -1,10 +1,7 @@
-# Web server (MAX webhook receiver + manager web UI)
+# Web server (manager web UI)
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 python-multipart==0.0.20
-
-# HTTP client (MAX Bot API + general requests)
-httpx==0.28.1
 
 # Browser automation for ekrom.ru (login session, cart, PDF download)
 playwright==1.49.1

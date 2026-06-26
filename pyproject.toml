@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "max-ekrom-bot"
 version = "0.1.0"
-description = "Бот для МАКС: подбор техники на ekrom.ru по сообщению клиента и выгрузка PDF"
+description = "Подбор встраиваемой техники на ekrom.ru по сообщению клиента и выгрузка PDF"
 requires-python = ">=3.10"
 readme = "README.md"
 

@@ -29,11 +29,6 @@ class Settings(BaseSettings):
     # socks5://127.0.0.1:10808  или  http://127.0.0.1:8080
     telegram_proxy: str = Field(default="", alias="TELEGRAM_PROXY")
 
-    # MAX
-    max_bot_token: str = Field(default="", alias="MAX_BOT_TOKEN")
-    max_api_base_url: str = Field(default="https://botapi.max.ru", alias="MAX_API_BASE_URL")
-    max_webhook_secret: str = Field(default="", alias="MAX_WEBHOOK_SECRET")
-
     # LLM
     llm_provider: str = Field(default="openai", alias="LLM_PROVIDER")
     llm_model: str = Field(default="gpt-4o-mini", alias="LLM_MODEL")
