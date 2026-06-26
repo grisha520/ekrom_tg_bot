@@ -146,7 +146,7 @@ def _help_text() -> str:
         "/status — проверить сессию ekrom\n"
         "/login — обновить вход в ekrom\n\n"
         "После подбора нажмите кнопку «Сформировать PDF».\n"
-        "Подбор занимает ~30–90 с, PDF ещё ~30–60 с."
+        "Подбор занимает ~30 с, PDF ещё ~30 с."
     )
 
 
@@ -232,7 +232,7 @@ async def handle_text(message: Message) -> None:
     async with lock:
         status = await message.answer(
             "⏳ Разбираю запрос и подбираю товары на ekrom…\n"
-            "<i>Обычно 30–90 секунд.</i>",
+            "<i>Обычно 30 секунд.</i>",
             parse_mode=ParseMode.HTML,
         )
         pipeline = Pipeline(get_settings())
@@ -302,7 +302,7 @@ async def callback_pdf(callback: CallbackQuery) -> None:
     async with lock:
         status = await callback.message.answer(
             "⏳ Добавляю товары в корзину и формирую PDF…\n"
-            "<i>Обычно 30–60 секунд.</i>",
+            "<i>Обычно 30 секунд.</i>",
             parse_mode=ParseMode.HTML,
         )
         pipeline = Pipeline(get_settings())
