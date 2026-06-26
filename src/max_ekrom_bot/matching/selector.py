@@ -141,15 +141,31 @@ def _title_burners(title: str) -> int | None:
 
 
 def _title_width_mm(title: str) -> int | None:
+    # Только ширина С ЕДИНИЦАМИ (60 см / 600 мм). Голые трёхзначные числа НЕ
+    # берём — это номера моделей (Millen MEO 603, Lex EDP 607), а не ширина.
     low = title.lower()
     m = re.search(r"(\d{2,3})\s*см\b", low)
     if m:
         return int(m.group(1)) * 10
-    for m in re.finditer(r"\b(\d{3})\b", low):
-        v = int(m.group(1))
-        if 400 <= v <= 1200:
-            return v
+    m = re.search(r"(\d{3,4})\s*мм\b", low)
+    if m:
+        return int(m.group(1))
     return None
+
+
+def _install_family(text: str) -> str | None:
+    """Тип установки: встраиваемый / отдельностоящий (по тексту)."""
+    t = text.lower()
+    if "отдельностоящ" in t or "отдельно стоящ" in t:
+        return "отдельностоящий"
+    if "встраив" in t or "встро" in t:  # встраиваемая, полновстраиваемая, встроенная
+        return "встраиваемый"
+    return None
+
+
+def _product_install(product: CatalogProduct) -> str | None:
+    val = _attr_get(product, "установк", "монтаж")
+    return (_install_family(val) if val else None) or _install_family(product.title)
 
 
 def _color_conflict(want: str, have: set[str]) -> bool:
@@ -307,6 +323,13 @@ class ProductSelector:
         if spec.burners:
             b = _product_burners(product)
             if b is not None and b != spec.burners:
+                return False
+        # Тип установки: встраиваемый под запрос «встраиваемый» и наоборот
+        # (#2 — иначе под «встраиваемый холодильник» мог попасть отдельностоящий).
+        if spec.install_type:
+            want = _install_family(spec.install_type)
+            have = _product_install(product)
+            if want and have and want != have:
                 return False
         return True
 

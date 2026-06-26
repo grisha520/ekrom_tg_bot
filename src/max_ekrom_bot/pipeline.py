@@ -418,6 +418,13 @@ class Pipeline:
             # категории нет — текстовый поиск как последний вариант
             candidates = await ekrom.search(spec.raw_text or spec.appliance.value, page=page)
 
+        # #1: в мелких разделах карточки иногда без цены (например обогреватели) —
+        # тогда подбор отсеивает всё как «без цены». Дочитываем цену/наличие со
+        # страниц первых товаров (кап ограничивает время).
+        if candidates and not any(c.price is not None for c in candidates):
+            for product in candidates[:_MAX_MODEL_FETCHES]:
+                await ekrom.fetch_product_details(product, page)
+
         # Если указана конкретная модель — ищем её прямым поиском по сайту и
         # дочитываем цену/наличие со страниц совпавших товаров (точной модели
         # часто нет в первых карточках категории). Бренд без модели не ищем —
