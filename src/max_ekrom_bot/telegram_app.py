@@ -24,11 +24,14 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.types import (
+    BotCommand,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
     TelegramObject,
 )
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -137,15 +140,35 @@ def _deny_message() -> str:
     )
 
 
+# Кнопки постоянной клавиатуры (нажатие шлёт этот текст — ловим его в handle_text).
+BTN_STATUS = "🔁 Проверить вход"
+BTN_LOGIN = "🔐 Обновить вход"
+BTN_HELP = "ℹ️ Как пользоваться"
+
+
+def _main_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянная клавиатура под полем ввода — работа кнопками, без команд."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_LOGIN)],
+            [KeyboardButton(text=BTN_HELP)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Вставьте сообщение клиента…",
+    )
+
+
 def _help_text() -> str:
     return (
         "<b>Подбор техники ekrom</b>\n\n"
-        "Отправьте сообщение клиента (списком позиций) — бот подберёт товары на сайте.\n\n"
-        "<b>Команды:</b>\n"
-        "/start — эта справка\n"
-        "/status — проверить сессию ekrom\n"
-        "/login — обновить вход в ekrom\n\n"
-        "После подбора нажмите кнопку «Сформировать PDF».\n"
+        "📋 Просто пришлите сообщение клиента (списком позиций) — бот подберёт "
+        "товары и покажет превью с ценами. Затем нажмите кнопку "
+        "«📄 Сформировать PDF».\n\n"
+        "Кнопки под полем ввода:\n"
+        f"{BTN_STATUS} — проверить сессию ekrom\n"
+        f"{BTN_LOGIN} — обновить вход в ekrom\n"
+        f"{BTN_HELP} — эта справка\n\n"
         "Подбор занимает ~30 с, PDF ещё ~30 с."
     )
 
@@ -162,7 +185,9 @@ async def cmd_start(message: Message) -> None:
     if not _user_allowed(message.from_user and message.from_user.id):
         await message.answer(_deny_message())
         return
-    await message.answer(_help_text(), parse_mode=ParseMode.HTML)
+    await message.answer(
+        _help_text(), parse_mode=ParseMode.HTML, reply_markup=_main_keyboard()
+    )
 
 
 async def cmd_status(message: Message) -> None:
@@ -182,7 +207,7 @@ async def cmd_status(message: Message) -> None:
     else:
         await status.edit_text(
             "⚪ Вход в ekrom не выполнен или сессия истекла.\n"
-            "Нажмите /login или на ПК с ботом:\n"
+            f"Нажмите кнопку «{BTN_LOGIN}» или на ПК с ботом:\n"
             "<code>python scripts/login_ekrom.py</code>",
             parse_mode=ParseMode.HTML,
         )
@@ -223,6 +248,19 @@ async def handle_text(message: Message) -> None:
         await message.answer(_deny_message())
         return
 
+    # Нажатия кнопок постоянной клавиатуры приходят как обычный текст — разводим
+    # их по действиям, не отдавая в подбор.
+    text = message.text.strip()
+    if text == BTN_STATUS:
+        await cmd_status(message)
+        return
+    if text == BTN_LOGIN:
+        await cmd_login(message)
+        return
+    if text == BTN_HELP:
+        await cmd_start(message)
+        return
+
     chat_id = message.chat.id
     lock = _chat_lock(chat_id)
     if lock.locked():
@@ -234,6 +272,7 @@ async def handle_text(message: Message) -> None:
             "⏳ Разбираю запрос и подбираю товары на ekrom…\n"
             "<i>Обычно 30 секунд.</i>",
             parse_mode=ParseMode.HTML,
+            reply_markup=_main_keyboard(),
         )
         pipeline = Pipeline(get_settings())
 
@@ -411,6 +450,14 @@ async def main() -> None:
 
     bot = _make_bot(settings)
     await _wait_telegram(bot)
+    try:
+        await bot.set_my_commands([
+            BotCommand(command="start", description="ℹ️ Как пользоваться"),
+            BotCommand(command="status", description="🔁 Проверить вход в ekrom"),
+            BotCommand(command="login", description="🔐 Обновить вход в ekrom"),
+        ])
+    except Exception:  # noqa: BLE001 — меню команд не критично
+        logger.warning("не удалось установить меню команд", exc_info=True)
     dp = _build_dispatcher()
     logger.info(
         "Telegram-бот запущен (long polling). Менеджеров: %s",
