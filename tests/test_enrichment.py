@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from max_ekrom_bot.matching.selector import (
     ProductSelector,
+    _canon_color,
     _color_conflict,
     _install_family,
     _product_burners,
@@ -108,6 +109,18 @@ def test_economy_not_fooled_by_model_number_width():
     cheap = _p("Электрический духовой шкаф Krona ESSENZA 60 WH", price=26000)
     ranked = sel.ranked_candidates(spec, [pricey, cheap])
     assert ranked[0] is cheap
+
+
+def test_beige_and_white_are_distinct():
+    # «бежевая» не должна подходить под «белый» и наоборот (#3).
+    assert _color_conflict("бежевый", {"белый"}) is True
+    assert _color_conflict("белый", {"бежевый"}) is True
+    assert _color_conflict("белый", {"белый"}) is False
+
+
+def test_silver_maps_to_steel():
+    assert _canon_color("серебристая") == "нержавейка"
+    assert _canon_color("серебристый") == "нержавейка"
 
 
 def test_install_family_detection():
