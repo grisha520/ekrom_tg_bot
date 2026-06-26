@@ -40,7 +40,7 @@ def test_groq_defaults_model_when_openai_model_configured():
     # LLM_MODEL=gpt-* не подходит Groq → должна подставиться дефолтная модель Groq.
     settings = Settings(LLM_PROVIDER="groq", GROQ_API_KEY="gk-x", LLM_MODEL="gpt-4o-mini")
     provider = get_llm_provider(settings)
-    assert provider._model == "llama-3.3-70b-versatile"
+    assert provider._model == "openai/gpt-oss-120b"
 
 
 def test_unknown_provider_raises():

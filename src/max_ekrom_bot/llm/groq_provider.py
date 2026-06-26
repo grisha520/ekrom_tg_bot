@@ -2,7 +2,8 @@
 
 Groq предоставляет OpenAI-совместимый API (бесплатный тариф, быстрый inference
 на LPU), поэтому переиспользуем тот же openai-SDK, лишь меняя base_url и ключ.
-Дефолтная модель — llama-3.3-70b-versatile (хороший русский + JSON-режим).
+Дефолтная модель — openai/gpt-oss-120b (хороший русский + JSON-режим, выше
+суточный лимит токенов; заменила снятую с поддержки llama-3.3-70b-versatile).
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from openai import OpenAI
 
 from .base import LLMProvider
 
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 
 
 class GroqProvider(LLMProvider):
