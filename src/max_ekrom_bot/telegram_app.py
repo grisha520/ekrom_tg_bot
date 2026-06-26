@@ -373,11 +373,14 @@ async def handle_text(message: Message) -> None:
         return
 
     async with lock:
+        # Без reply-клавиатуры: это сообщение затем редактируется (edit_text)
+        # и на него навешивается inline-кнопка PDF. Telegram не позволяет
+        # editMessageText для сообщения, отправленного с ReplyKeyboardMarkup
+        # («message can't be edited»). Постоянная клавиатура и так висит с /start.
         status = await message.answer(
             "⏳ Разбираю запрос и подбираю товары на ekrom…\n"
             "<i>Обычно 30 секунд.</i>",
             parse_mode=ParseMode.HTML,
-            reply_markup=_main_keyboard(admin),
         )
         pipeline = Pipeline(get_settings())
 
