@@ -60,6 +60,49 @@ def test_excluded_color_filtered_out():
     assert [c.title for c in ranked] == ["Шкаф белый"]
 
 
+def test_excluded_fuel_filtered_out():
+    # «кроме газовых» → газовые отсекаются, остаётся электрическая.
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.COOKTOP, exclude_fuel=["газовая"])
+    cands = [_p("Панель газовая", 100), _p("Панель электрическая", 120)]
+    ranked = sel.ranked_candidates(spec, cands)
+    assert [c.title for c in ranked] == ["Панель электрическая"]
+
+
+def test_excluded_fuel_declension():
+    # Исключение в мужском роде («не газовый») нормализуется по стему.
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.COOKTOP, exclude_fuel=["газовый"])
+    ranked = sel.ranked_candidates(spec, [_p("Панель газовая", 100), _p("Панель индукционная", 120)])
+    assert [c.title for c in ranked] == ["Панель индукционная"]
+
+
+def test_max_price_caps_selection():
+    # Бюджет 30000: дорогие отбрасываются, «средний» считается в пределах бюджета.
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.OVEN, max_price=30000)
+    cands = [_p("A", 20000), _p("B", 28000), _p("C", 90000), _p("D", 150000)]
+    ranked = sel.ranked_candidates(spec, cands)
+    assert all(c.price <= 30000 for c in ranked)
+    assert {c.price for c in ranked} == {20000, 28000}
+
+
+def test_max_price_fallback_when_nothing_fits():
+    # Если в бюджет не влез никто — не «не найдено», а ближайшее (всех ранжируем).
+    sel = ProductSelector(segment="эконом")
+    spec = ProductSpec(appliance=ApplianceType.OVEN, max_price=10000)
+    cands = [_p("A", 40000), _p("B", 90000)]
+    ranked = sel.ranked_candidates(spec, cands)
+    assert ranked and ranked[0].price == 40000  # эконом → самый дешёвый из доступных
+
+
+def test_max_price_coerced_from_messy_string():
+    assert ProductSpec(max_price="30 000 руб").max_price == 30000
+    assert ProductSpec(max_price="до 25000").max_price == 25000
+    assert ProductSpec(max_price=None).max_price is None
+    assert ProductSpec(max_price="").max_price is None
+
+
 def test_candidates_without_price_excluded():
     sel = ProductSelector(segment="средний")
     cands = [_p("A", None), _p("B", 150)]

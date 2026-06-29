@@ -273,6 +273,13 @@ class ProductSelector:
         priced = [c for c in filtered if c.price is not None]
         if not priced:
             return []
+        # Ценовой потолок («до 30000»): оставляем только то, что в бюджет. Если в
+        # бюджет не влез никто — не обнуляем выдачу, ранжируем всех (тогда подбор
+        # вернёт ближайшее к бюджету, а не «не найдено»).
+        if spec.max_price:
+            within = [c for c in priced if (c.price or 0.0) <= spec.max_price]
+            if within:
+                priced = within
         prices = sorted(c.price or 0.0 for c in priced)
         return sorted(
             priced, key=lambda c: self._score(spec, c, prices), reverse=True
@@ -308,10 +315,15 @@ class ProductSelector:
     def _passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
         colors = _product_colors(product)
 
-        # Жёсткие исключения по цвету («не чёрную»).
+        # Жёсткие исключения по цвету («не чёрную») и топливу («кроме газовых»).
         for excluded in spec.exclude_colors:
             if excluded and _canon_color(excluded) in colors:
                 return False
+        if spec.exclude_fuel:
+            fuels = _product_fuels(product)
+            for excluded in spec.exclude_fuel:
+                if excluded and _canon_fuel(excluded) in fuels:
+                    return False
 
         # Позитивная валидация (#1): отбрасываем только при ЯВНОМ противоречии
         # (заявлен другой цвет/топливо/число конфорок). Молчание — ок. Сигналы

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Optional
 
@@ -48,18 +49,38 @@ class ProductSpec(BaseModel):
     fuel_type: Optional[str] = Field(default=None, description="Электрическая / газовая / индукционная")
     burners: Optional[int] = Field(default=None, description="Количество конфорок (для варочных)")
 
+    # Ценовой потолок клиента, ₽ («до 30000», «не дороже 25 тыс»). Если задан —
+    # подбор не превышает его (при наличии вариантов в бюджете).
+    max_price: Optional[int] = Field(default=None, description="Максимальная цена, ₽")
+
     # Произвольные дополнительные требования, которые не легли в типовые поля
     extra: dict[str, str] = Field(default_factory=dict)
 
-    # Жёсткие исключения (например «не чёрную»)
+    # Жёсткие исключения (например «не чёрную», «кроме газовых»)
     exclude_colors: list[str] = Field(default_factory=list)
+    exclude_fuel: list[str] = Field(default_factory=list)
 
     # LLM нередко присылает null вместо пустого списка/словаря — приводим к default,
     # чтобы валидация не падала (поля по схеме всё равно необязательные).
-    @field_validator("exclude_colors", mode="before")
+    @field_validator("exclude_colors", "exclude_fuel", mode="before")
     @classmethod
     def _none_to_empty_list(cls, v: object) -> object:
         return [] if v is None else v
+
+    @field_validator("max_price", mode="before")
+    @classmethod
+    def _coerce_price(cls, v: object) -> object:
+        # LLM может прислать «30000», «30 000», «30000 руб» или число — берём цифры.
+        if v is None or v == "":
+            return None
+        if isinstance(v, bool):  # bool — подкласс int, отсекаем явно
+            return None
+        if isinstance(v, (int, float)):
+            return int(v)
+        if isinstance(v, str):
+            digits = re.sub(r"[^\d]", "", v)
+            return int(digits) if digits else None
+        return None
 
     @field_validator("extra", mode="before")
     @classmethod

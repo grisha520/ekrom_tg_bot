@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 
 from max_ekrom_bot.config import Settings
+from max_ekrom_bot.matching.selector import ProductSelector
 from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
 from max_ekrom_bot.pipeline import Pipeline, _candidate_brief, _rerank_prompts
 
@@ -96,3 +97,31 @@ def test_llm_pick_exception_falls_back():
 
 def test_rerank_flag_defaults_off():
     assert Settings(LLM_PROVIDER="rule").llm_rerank is False
+
+
+# ── Экономная замена бренда: аналог берём из дешёвых, а не «средний» ──────────
+
+def test_brand_substitution_picks_cheapest_analog():
+    # Просили Indesit, его нет → тир «rest». Без фикса «средний» взял бы 60000;
+    # с фиксом замена идёт от самого дешёвого доступного аналога.
+    p = Pipeline(Settings(LLM_PROVIDER="rule"))
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.FRIDGE, brand="Indesit")
+    cands = [_p("Холодильник Bosch", 60000), _p("Холодильник Hansa", 25000), _p("Холодильник Kuppersberg", 96000)]
+    ranked = sel.ranked_candidates(spec, cands)
+    _wm, _wb, tiers = Pipeline._build_tiers(spec, ranked)
+    product, tier = asyncio.run(p._first_available(None, sel, spec, tiers, None))
+    assert tier == "rest"
+    assert product.price == 25000
+
+
+def test_no_brand_keeps_segment_choice():
+    # Без бренда экономная сортировка не применяется — работает «средний».
+    p = Pipeline(Settings(LLM_PROVIDER="rule"))
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.FRIDGE)
+    cands = [_p("Холодильник A", 20000), _p("Холодильник B", 50000), _p("Холодильник C", 80000)]
+    ranked = sel.ranked_candidates(spec, cands)
+    _wm, _wb, tiers = Pipeline._build_tiers(spec, ranked)
+    product, tier = asyncio.run(p._first_available(None, sel, spec, tiers, None))
+    assert product.price == 50000  # медианный, а не самый дешёвый

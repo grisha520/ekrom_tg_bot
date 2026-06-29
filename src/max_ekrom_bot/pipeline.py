@@ -284,7 +284,14 @@ class Pipeline:
         отсекает явно другой цвет.
         """
         for tier_name, group in tiers:
-            for product in group[:_MAX_AVAILABILITY_CHECKS]:
+            scan = group
+            # Замена бренда/модели: запрошенного нет, берём аналог из «прочих».
+            # Чтобы замена не улетала в премиум (Indesit → встраиваемый за 96к),
+            # перебираем аналоги от самых дешёвых — клиент получает бюджетную
+            # замену, а не дорогую. На обычный подбор (без бренда) не влияет.
+            if tier_name == "rest" and (spec.brand or spec.model):
+                scan = sorted(group, key=lambda p: p.price if p.price is not None else float("inf"))
+            for product in scan[:_MAX_AVAILABILITY_CHECKS]:
                 if product.in_stock is False:
                     continue
                 if not selector.color_confirmed_by_title(spec, product):

@@ -24,7 +24,10 @@ class GroqProvider(LLMProvider):
     ) -> None:
         if not api_key:
             raise ValueError("GROQ_API_KEY не задан — заполните .env")
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # max_retries: SDK сам ретраит 429 (лимит TPM 8000) с экспоненциальной
+        # паузой, учитывая заголовок Retry-After. На бесплатном тарифе при
+        # одновременных запросах от нескольких менеджеров это сглаживает всплески.
+        self._client = OpenAI(api_key=api_key, base_url=base_url, max_retries=5)
         self._model = model
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> str:
