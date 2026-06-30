@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # Уведомлять операторов (admin_user_ids) о новом клиентском запросе-лиде.
     notify_lead: bool = Field(default=True, alias="NOTIFY_LEAD")
 
+    # Кэш каталога (масштаб): кандидаты для 6 базовых типов берём из локальной БД
+    # (наполняется краулером), а не обходом сайта — быстро и параллельно. Выкл —
+    # прежний живой обход. TTL — сколько секунд кэш считается свежим.
+    use_catalog_cache: bool = Field(default=False, alias="USE_CATALOG_CACHE")
+    catalog_cache_ttl: int = Field(default=86400, alias="CATALOG_CACHE_TTL")
+
     @staticmethod
     def _parse_ids(raw: str) -> frozenset[int]:
         ids: set[int] = set()
@@ -100,6 +106,10 @@ class Settings(BaseSettings):
     @property
     def managers_store_path(self) -> Path:
         return REPO_ROOT / "data" / "managers.json"
+
+    @property
+    def catalog_db_path(self) -> Path:
+        return REPO_ROOT / "data" / "catalog.db"
 
     @property
     def storage_state_path(self) -> Path:

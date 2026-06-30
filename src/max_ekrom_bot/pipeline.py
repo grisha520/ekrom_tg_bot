@@ -134,6 +134,17 @@ class Pipeline:
         self._parser = parser or get_parser(self._settings)
         self._llm = None  # ленивый LLM-провайдер для ре-ранка (#6)
         self._resolver = None  # ленивый резолвер категорий
+        self._cache = None  # ленивый кэш каталога
+
+    def _get_cache(self):
+        """Кэш каталога (или None, если выключен в настройках)."""
+        if not self._settings.use_catalog_cache:
+            return None
+        if self._cache is None:
+            from .ekrom.catalog_cache import CatalogCache
+
+            self._cache = CatalogCache(self._settings.catalog_db_path)
+        return self._cache
 
     def _get_llm(self):
         if self._llm is None:
@@ -192,6 +203,13 @@ class Pipeline:
                             await ekrom.ensure_enriched(
                                 item.product, page, with_image=True
                             )
+                            cache = self._get_cache()
+                            if cache is not None:
+                                cache.update_enrichment(
+                                    item.product.url,
+                                    item.product.attributes,
+                                    item.product.image_url,
+                                )
                         return item
                     finally:
                         await page.close()
@@ -420,19 +438,27 @@ class Pipeline:
         """
         base = self._settings.ekrom_base_url
         candidates: list = []
-        filtered_url = build_category_url(base, spec)  # не None только для 6 типов
-        if filtered_url:
+        cat_path = category_for(spec.appliance)  # не None только для 6 типов
+        filtered_url = build_category_url(base, spec)
+
+        # Кэш каталога: для 6 базовых типов отдаём кандидатов из БД (если свежо) —
+        # без браузера; фильтрацию по характеристикам делает селектор клиентски.
+        cache = self._get_cache()
+        if cache and cat_path:
+            age = cache.category_age(cat_path)
+            if age is not None and age < self._settings.catalog_cache_ttl:
+                candidates = cache.query_category(cat_path)
+
+        if not candidates and filtered_url:
             candidates = await ekrom.browse_url(filtered_url, page=page)
-            if not candidates:
+            if not candidates and cat_path:
                 # фильтры могли пересушить выдачу — откат к категории без фильтров
-                category = category_for(spec.appliance)
-                if category:
-                    candidates = await ekrom.browse_category(category, page=page)
-        elif spec.category_url:
+                candidates = await ekrom.browse_category(cat_path, page=page)
+        elif not candidates and spec.category_url:
             # категория выбрана моделью — идём в неё (фильтруем уже клиентски)
             url = base.rstrip("/") + spec.category_url
             candidates = await ekrom.browse_url(url, page=page)
-        else:
+        elif not candidates:
             # категории нет — текстовый поиск как последний вариант
             candidates = await ekrom.search(spec.raw_text or spec.appliance.value, page=page)
 
