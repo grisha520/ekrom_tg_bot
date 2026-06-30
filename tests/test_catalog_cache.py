@@ -53,6 +53,27 @@ def test_upsert_keeps_attributes_on_relisting(tmp_path):
     assert got.image_url == "https://x/p.jpg"  # фото сохранилось
 
 
+def test_product_in_multiple_categories(tmp_path):
+    # Товар принадлежит и родителю, и потомку — обе категории его возвращают
+    # (модель many-to-many; раньше «последняя категория» затирала первую).
+    cache = CatalogCache(tmp_path / "c.db")
+    parent = "/catalog/duhovye_shkafy/"
+    child = "/catalog/duhovye_shkafy/elektricheskie/"
+    cache.upsert_many([_p("u1", "Духовка", 100)], parent)
+    cache.upsert_many([_p("u1", "Духовка", 100)], child)  # тот же товар в потомке
+    assert [p.url for p in cache.query_category(parent)] == ["u1"]
+    assert [p.url for p in cache.query_category(child)] == ["u1"]
+
+
+def test_recrawl_refreshes_category_membership(tmp_path):
+    # Повторный краул категории пересобирает её состав (ушедший товар исчезает).
+    cache = CatalogCache(tmp_path / "c.db")
+    cache.upsert_many([_p("u1", "A", 100), _p("u2", "B", 200)], CAT)
+    cache.upsert_many([_p("u1", "A", 100)], CAT)  # u2 больше не в категории
+    urls = {p.url for p in cache.query_category(CAT)}
+    assert urls == {"u1"}
+
+
 def test_update_enrichment_sets_attrs_and_image(tmp_path):
     cache = CatalogCache(tmp_path / "c.db")
     cache.upsert_many([_p("u1", "A", 100)], CAT)

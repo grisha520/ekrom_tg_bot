@@ -40,6 +40,10 @@ def _row_to_product(row) -> CatalogProduct:
 
 
 class CatalogCache:
+    """Кэш каталога с моделью many-to-many: товар (по url) может принадлежать
+    нескольким категориям (родитель + потомок), поэтому связь категория↔товар
+    хранится отдельной таблицей `memberships`, а карточка товара — одна."""
+
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
         self._ensure()
@@ -56,7 +60,6 @@ class CatalogCache:
             c.execute(
                 """CREATE TABLE IF NOT EXISTS products (
                     url TEXT PRIMARY KEY,
-                    category TEXT,
                     title TEXT,
                     price REAL,
                     in_stock INTEGER,
@@ -66,40 +69,53 @@ class CatalogCache:
                     updated_at REAL
                 )"""
             )
-            c.execute("CREATE INDEX IF NOT EXISTS idx_category ON products(category)")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS memberships (
+                    category TEXT,
+                    url TEXT,
+                    PRIMARY KEY (category, url)
+                )"""
+            )
+            c.execute("CREATE INDEX IF NOT EXISTS idx_mem_cat ON memberships(category)")
 
     def upsert_many(self, products: list[CatalogProduct], category: str) -> int:
-        """Записать/обновить товары категории (из краулера). Не затирает уже
-        накопленные характеристики/фото пустыми значениями."""
+        """Записать/обновить товары категории. Принадлежность категории
+        пересобирается (старые связи этой категории очищаются), карточки товаров
+        апсертятся без затирания накопленных характеристик/фото пустыми."""
         now = time.time()
-        rows = [
+        prod_rows = [
             (
-                p.url, category, p.title, p.price, _b2i(p.in_stock), p.image_url,
+                p.url, p.title, p.price, _b2i(p.in_stock), p.image_url,
                 json.dumps(p.attributes or {}, ensure_ascii=False), p.product_id, now,
             )
             for p in products if p.url
         ]
+        mem_rows = [(category, p.url) for p in products if p.url]
         with self._conn() as c:
+            c.execute("DELETE FROM memberships WHERE category=?", (category,))
             c.executemany(
                 """INSERT INTO products
-                   (url,category,title,price,in_stock,image_url,attributes,product_id,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)
+                   (url,title,price,in_stock,image_url,attributes,product_id,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?)
                    ON CONFLICT(url) DO UPDATE SET
-                     category=excluded.category, title=excluded.title,
-                     price=excluded.price, in_stock=excluded.in_stock,
+                     title=excluded.title, price=excluded.price,
+                     in_stock=excluded.in_stock,
                      image_url=COALESCE(excluded.image_url, products.image_url),
                      attributes=CASE WHEN excluded.attributes <> '{}'
                                      THEN excluded.attributes ELSE products.attributes END,
                      product_id=excluded.product_id, updated_at=excluded.updated_at""",
-                rows,
+                prod_rows,
             )
-        return len(rows)
+            c.executemany(
+                "INSERT OR IGNORE INTO memberships(category,url) VALUES (?,?)", mem_rows
+            )
+        return len(prod_rows)
 
     def query_category(self, category: str) -> list[CatalogProduct]:
         with self._conn() as c:
             rows = c.execute(
-                "SELECT url,title,price,in_stock,image_url,attributes,product_id "
-                "FROM products WHERE category=?",
+                "SELECT p.url,p.title,p.price,p.in_stock,p.image_url,p.attributes,p.product_id "
+                "FROM products p JOIN memberships m ON m.url=p.url WHERE m.category=?",
                 (category,),
             ).fetchall()
         return [_row_to_product(r) for r in rows]
@@ -108,7 +124,9 @@ class CatalogCache:
         """Сколько секунд назад категорию обновляли (None — её нет в кэше)."""
         with self._conn() as c:
             row = c.execute(
-                "SELECT MAX(updated_at) FROM products WHERE category=?", (category,)
+                "SELECT MAX(p.updated_at) FROM products p "
+                "JOIN memberships m ON m.url=p.url WHERE m.category=?",
+                (category,),
             ).fetchone()
         if not row or row[0] is None:
             return None
