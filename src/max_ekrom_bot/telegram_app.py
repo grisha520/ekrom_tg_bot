@@ -499,9 +499,15 @@ async def handle_text(message: Message) -> None:
             )
             return
 
+        # В клиентском режиме дочитываем характеристики и фото выбранных товаров —
+        # для богатого PDF (как в корзинном). Операторам это не нужно (у них PDF
+        # из корзины), поэтому не тратим время.
+        client_flow = get_settings().client_mode and not op
         try:
             async with _EKROM_LOCK:
-                selection = await pipeline.select_products(request)
+                selection = await pipeline.select_products(
+                    request, enrich_chosen=client_flow
+                )
         except Exception:  # noqa: BLE001
             logger.exception("select_products failed")
             await status.edit_text("❌ Ошибка при подборе на ekrom. Попробуйте позже.")

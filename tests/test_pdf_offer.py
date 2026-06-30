@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 pytest.importorskip("reportlab")  # модуль опционален в окружениях без reportlab
 
 from pypdf import PdfReader  # noqa: E402
+
+# 1x1 PNG для проверки пути с фото без сети.
+_PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
 
 from max_ekrom_bot.config import Settings  # noqa: E402
 from max_ekrom_bot.models import (  # noqa: E402
@@ -79,3 +86,25 @@ def test_attrs_line_hides_service_fields_and_limits():
 
 def test_total_price_in_selection():
     assert _selection().total_price == pytest.approx(37780.0)
+
+
+def test_fetch_image_none_for_blank():
+    from max_ekrom_bot.pdf.offer import _fetch_image
+
+    assert _fetch_image(None) is None
+    assert _fetch_image("") is None
+
+
+def test_pdf_with_photos(monkeypatch, tmp_path):
+    # Фото скачивается (мок) → PDF собирается с колонкой фото, без сети.
+    from max_ekrom_bot.pdf import offer
+
+    monkeypatch.setattr(offer, "_fetch_image", lambda url: _PNG_1X1 if url else None)
+    sel = _selection()
+    for it in sel.matched:
+        it.product.image_url = "https://example/p.png"
+    out = tmp_path / "with_photos.pdf"
+    offer.build_offer_pdf(sel, Settings(LLM_PROVIDER="rule"), out)
+    assert out.exists() and out.stat().st_size > 800
+    text = "".join(p.extract_text() or "" for p in PdfReader(str(out)).pages)
+    assert "Lex EDM 4575" in text  # текст и характеристики на месте рядом с фото

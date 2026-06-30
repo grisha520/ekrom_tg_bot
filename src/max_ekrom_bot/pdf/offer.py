@@ -15,10 +15,12 @@
 
 from __future__ import annotations
 
+import io
 import os
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
@@ -90,6 +92,33 @@ def _register_font(font_path: str = "") -> None:
     pdfmetrics.registerFont(TTFont(_FONT_BOLD, bold))
     pdfmetrics.registerFontFamily(_FONT, normal=_FONT, bold=_FONT_BOLD)
     _registered = True
+
+
+def _fetch_image(url: str | None) -> bytes | None:
+    """Скачать фото товара (JPEG/PNG). Любая осечка → None (PDF без фото)."""
+    if not url:
+        return None
+    try:
+        r = httpx.get(url, timeout=10.0, follow_redirects=True)
+        if r.status_code == 200:
+            data = r.content
+            if data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+                return data
+    except Exception:  # noqa: BLE001 — фото не критично
+        return None
+    return None
+
+
+def _image_flowable(url: str | None, box_mm: float):
+    data = _fetch_image(url)
+    if not data:
+        return ""
+    try:
+        img = Image(io.BytesIO(data))
+        img._restrictSize(box_mm, box_mm)
+        return img
+    except Exception:  # noqa: BLE001 — битое изображение
+        return ""
 
 
 def _fmt_price(value: float | None) -> str:
@@ -195,6 +224,11 @@ def build_offer_pdf(
     story.append(Spacer(1, 4 * mm))
 
     # ── Позиции ──────────────────────────────────────────────────────────────
+    # Фото грузим один раз. Колонка с фото добавляется, только если хоть у одного
+    # товара картинка скачалась — иначе пустой столбец зря занимает место.
+    photos = [_image_flowable(it.product.image_url, 22 * mm) for it in selection.matched]
+    has_photos = any(ph != "" for ph in photos)
+
     rows: list[list] = []
     for i, item in enumerate(selection.matched, 1):
         p = item.product
@@ -202,13 +236,15 @@ def build_offer_pdf(
         attrs = _attrs_line(p.attributes)
         if attrs:
             name_cell.append(Paragraph(attrs, st["attrs"]))
-        rows.append(
-            [Paragraph(str(i), st["base"]), name_cell,
-             Paragraph(_fmt_price(p.price), st["price"])]
-        )
+        price_cell = Paragraph(_fmt_price(p.price), st["price"])
+        if has_photos:
+            rows.append([Paragraph(str(i), st["base"]), photos[i - 1], name_cell, price_cell])
+        else:
+            rows.append([Paragraph(str(i), st["base"]), name_cell, price_cell])
 
     if rows:
-        table = Table(rows, colWidths=[8 * mm, 132 * mm, 34 * mm])
+        col_widths = [7 * mm, 26 * mm, 107 * mm, 34 * mm] if has_photos else [8 * mm, 132 * mm, 34 * mm]
+        table = Table(rows, colWidths=col_widths)
         table.setStyle(
             TableStyle(
                 [

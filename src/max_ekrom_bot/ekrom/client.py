@@ -448,23 +448,47 @@ class EkromClient:
                 props[name] = value
         return props
 
-    async def ensure_enriched(self, product: CatalogProduct, page: Page | None = None) -> None:
+    async def read_product_image(self, page: Page | None = None) -> str | None:
+        """URL главного фото товара с открытой страницы (для клиентского PDF).
+
+        Берём первое изображение с путём /upload/iblock/ (так у ekrom хранятся
+        фото товаров; иконки share/pdf .svg и т.п. отсекаются). Учитываем lazyload
+        (реальный URL может быть в data-src).
+        """
+        page = page or self.page
+        try:
+            src = await page.evaluate(
+                "() => { for (const i of document.querySelectorAll('img')) {"
+                " const u = i.getAttribute('data-src') || i.getAttribute('src') || '';"
+                " if (u.includes('/upload/iblock/')) return u; } return null; }"
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        return self._abs_url(src) if src else None
+
+    async def ensure_enriched(
+        self, product: CatalogProduct, page: Page | None = None, with_image: bool = False
+    ) -> None:
         """Догрузить характеристики товара в product.attributes (если их ещё нет).
 
         Переиспользует уже открытую страницу товара (после проверки наличия) —
         переходит на неё только если открыто что-то другое. Ошибки чтения не
         критичны: остаёмся без характеристик, подбор тогда опирается на название.
+        with_image=True — заодно вытащить URL фото (для клиентского PDF).
         """
-        if product.attributes:
+        if product.attributes and not (with_image and not product.image_url):
             return
         page = page or self.page
         try:
             if product_slug(page.url) != product_slug(product.url):
                 await page.goto(product.url, wait_until="domcontentloaded")
                 await page.wait_for_timeout(800)
-            props = await self.read_product_properties(page)
-            if props:
-                product.attributes = props
+            if not product.attributes:
+                props = await self.read_product_properties(page)
+                if props:
+                    product.attributes = props
+            if with_image and not product.image_url:
+                product.image_url = await self.read_product_image(page)
         except Exception:  # noqa: BLE001 — обогащение не критично для потока
             pass
 

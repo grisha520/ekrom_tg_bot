@@ -145,6 +145,8 @@ class CatalogProduct(BaseModel):
     brand: Optional[str] = None
     # ID для добавления в корзину (Bitrix product id), если удалось вытащить
     product_id: Optional[str] = None
+    # URL главного фото товара (для клиентского PDF), если удалось вытащить
+    image_url: Optional[str] = None
     attributes: dict[str, str] = Field(default_factory=dict)
     # None — ещё не проверяли; True/False — результат проверки на ekrom
     in_stock: Optional[bool] = None

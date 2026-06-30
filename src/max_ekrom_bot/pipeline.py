@@ -163,12 +163,18 @@ class Pipeline:
                 logger.warning("выбор категории не удался", exc_info=True)
         return request
 
-    async def select_products(self, request: CustomerRequest) -> SelectionResult:
+    async def select_products(
+        self, request: CustomerRequest, enrich_chosen: bool = False
+    ) -> SelectionResult:
         """Найти и подобрать товары под каждую позицию запроса (параллельно).
 
         Позиции независимы, поэтому обрабатываем их одновременно — каждая в
         своей вкладке браузера. Одновременность ограничена семафором, чтобы не
         перегружать сайт ekrom.
+
+        enrich_chosen=True — выбранный товар дочитывается (характеристики + фото)
+        на том же браузере, для клиентского PDF. Стоит чуть больше времени, но не
+        запускает второй браузер.
         """
         selector = ProductSelector(segment=request.segment)
         async with EkromClient(self._settings) as ekrom:
@@ -179,9 +185,14 @@ class Pipeline:
                     page = await ekrom.new_page()
                     try:
                         candidates = await self._candidates_for_spec(ekrom, spec, page)
-                        return await self._select_available(
+                        item = await self._select_available(
                             ekrom, selector, spec, candidates, page
                         )
+                        if enrich_chosen and item.product is not None:
+                            await ekrom.ensure_enriched(
+                                item.product, page, with_image=True
+                            )
+                        return item
                     finally:
                         await page.close()
 
