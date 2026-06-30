@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     output_dir: str = Field(default="data/out", alias="OUTPUT_DIR")
     require_confirmation: bool = Field(default=True, alias="REQUIRE_CONFIRMATION")
 
+    # Брендинг клиентского PDF (свой шаблон, не партнёрская корзина ekrom)
+    shop_name: str = Field(default="ekrom", alias="SHOP_NAME")
+    shop_contacts: str = Field(default="", alias="SHOP_CONTACTS")
+    shop_site: str = Field(default="https://www.ekrom.ru", alias="SHOP_SITE")
+    # Путь к TTF-шрифту с кириллицей; пусто — ищем системный (DejaVu/Arial)
+    pdf_font_path: str = Field(default="", alias="PDF_FONT_PATH")
+    pdf_logo_path: str = Field(default="", alias="PDF_LOGO_PATH")
+
     @staticmethod
     def _parse_ids(raw: str) -> frozenset[int]:
         ids: set[int] = set()

@@ -23,3 +23,6 @@ aiohttp-socks>=0.9.0
 
 # PDF text extraction (for validating/reading downloaded files)
 pypdf==5.1.0
+
+# PDF generation (свой клиентский PDF-подбор, не партнёрская корзина ekrom)
+reportlab==4.2.5
