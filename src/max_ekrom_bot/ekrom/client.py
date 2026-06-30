@@ -451,16 +451,21 @@ class EkromClient:
     async def read_product_image(self, page: Page | None = None) -> str | None:
         """URL главного фото товара с открытой страницы (для клиентского PDF).
 
-        Берём первое изображение с путём /upload/iblock/ (так у ekrom хранятся
-        фото товаров; иконки share/pdf .svg и т.п. отсекаются). Учитываем lazyload
-        (реальный URL может быть в data-src).
+        Фото товара лежат в /upload/iblock/, но там же — мелкий бейдж акции «%».
+        Берём САМОЕ КРУПНОЕ по отрисованному размеру изображение /upload/iblock/
+        (фото товара большое, бейдж/иконка мелкие), с порогом площади, чтобы
+        мелкие значки отсекались. Учитываем lazyload (URL может быть в data-src).
         """
         page = page or self.page
         try:
             src = await page.evaluate(
-                "() => { for (const i of document.querySelectorAll('img')) {"
-                " const u = i.getAttribute('data-src') || i.getAttribute('src') || '';"
-                " if (u.includes('/upload/iblock/')) return u; } return null; }"
+                "() => { let best=null, area=0;"
+                " for (const i of document.querySelectorAll('img')) {"
+                "  const u = i.getAttribute('data-src') || i.getAttribute('src') || '';"
+                "  if (!u.includes('/upload/iblock/')) continue;"
+                "  const r = i.getBoundingClientRect(); const a = r.width*r.height;"
+                "  if (a > area) { area = a; best = u; } }"
+                " return area >= 2500 ? best : null; }"
             )
         except Exception:  # noqa: BLE001
             return None
