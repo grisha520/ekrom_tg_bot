@@ -48,7 +48,6 @@ def test_unknown_provider_raises():
         get_llm_provider(Settings(LLM_PROVIDER="totally-unknown"))
 
 
-def test_not_implemented_providers():
-    for name in ("yandex", "gigachat"):
-        with pytest.raises(NotImplementedError):
-            get_llm_provider(Settings(LLM_PROVIDER=name))
+def test_gigachat_not_implemented():
+    with pytest.raises(NotImplementedError):
+        get_llm_provider(Settings(LLM_PROVIDER="gigachat"))

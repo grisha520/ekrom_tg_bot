@@ -1,8 +1,7 @@
 """Фабрика LLM-провайдера по конфигу.
 
-Реализованы OpenAI и Groq (бесплатный, OpenAI-совместимый). Заглушки
-yandex/gigachat подскажут, что нужно дописать провайдер при переходе на
-РФ-комплаенс.
+Реализованы OpenAI, Groq (бесплатный, OpenAI-совместимый) и YandexGPT
+(РФ-комплаенс, оплата в рублях). GigaChat — пока заглушка.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from ..config import Settings, get_settings
 from .base import LLMProvider
 from .groq_provider import DEFAULT_GROQ_MODEL, GroqProvider
 from .openai_provider import OpenAIProvider
+from .yandex_provider import YandexGPTProvider
 
 
 def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
@@ -32,11 +32,23 @@ def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
             base_url=settings.groq_base_url,
         )
 
-    if provider in {"yandex", "gigachat"}:
+    if provider == "yandex":
+        # Используем LLM_MODEL, только если это yandex-модель (yandexgpt-lite/
+        # yandexgpt/…). Иначе (там может остаться gpt-*/openai-модель от другого
+        # провайдера) — берём lite по умолчанию.
+        model = settings.llm_model
+        if not model or not model.lower().startswith("yandexgpt"):
+            model = "yandexgpt-lite"
+        return YandexGPTProvider(
+            api_key=settings.yandex_api_key,
+            folder_id=settings.yandex_folder_id,
+            model=model,
+        )
+
+    if provider == "gigachat":
         raise NotImplementedError(
-            f"Провайдер '{provider}' ещё не реализован. "
-            "Добавьте класс по образцу OpenAIProvider и подключите его здесь. "
-            "Для прототипа используйте LLM_PROVIDER=openai."
+            "Провайдер 'gigachat' ещё не реализован. Добавьте класс по образцу "
+            "YandexGPTProvider и подключите его здесь."
         )
 
     raise ValueError(f"Неизвестный LLM_PROVIDER: {settings.llm_provider}")

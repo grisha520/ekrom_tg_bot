@@ -8,6 +8,8 @@ playwright==1.49.1
 
 # LLM providers (parsing free-text requests into structured specs)
 openai==1.59.6
+# YandexGPT провайдер ходит по REST через httpx (openai его и так тянет)
+httpx>=0.27,<1
 
 # Config & data models
 pydantic==2.10.4
