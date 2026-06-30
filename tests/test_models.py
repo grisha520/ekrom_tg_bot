@@ -19,6 +19,23 @@ def test_spec_none_coerced_to_empty_collections():
     assert spec.extra == {}
 
 
+def test_spec_blank_strings_coerced_to_none():
+    # YandexGPT иногда присылает строку "null" вместо JSON null.
+    spec = ProductSpec.model_validate({
+        "appliance": "oven",
+        "color": "null",
+        "fuel_type": "NULL",
+        "brand": "",
+        "model": "-",
+        "install_type": "нет",
+    })
+    assert spec.color is None
+    assert spec.fuel_type is None
+    assert spec.brand is None
+    assert spec.model is None
+    assert spec.install_type is None
+
+
 def test_extra_coerces_nonstring_values():
     # LLM кладёт в extra числа/булевы — не должно падать (как было «Тостер slots:2»).
     spec = ProductSpec.model_validate({"raw_text": "Тостер", "extra": {"slots": 2, "f": True}})

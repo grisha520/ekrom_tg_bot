@@ -67,6 +67,19 @@ class ProductSpec(BaseModel):
     def _none_to_empty_list(cls, v: object) -> object:
         return [] if v is None else v
 
+    # Некоторые модели (напр. YandexGPT) присылают строку "null" вместо JSON null
+    # для пустых необязательных полей. Приводим такие к None, иначе бренд="null"
+    # сломает каскад замен, а цвет="null" — фильтрацию по цвету.
+    @field_validator(
+        "color", "fuel_type", "install_type", "brand", "model",
+        "category_url", "category_name", mode="before",
+    )
+    @classmethod
+    def _blank_to_none(cls, v: object) -> object:
+        if isinstance(v, str) and v.strip().lower() in {"", "null", "none", "-", "нет"}:
+            return None
+        return v
+
     @field_validator("max_price", mode="before")
     @classmethod
     def _coerce_price(cls, v: object) -> object:
