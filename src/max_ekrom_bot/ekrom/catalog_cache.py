@@ -50,6 +50,9 @@ class CatalogCache:
     def _ensure(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
+            # WAL: читатели (бот) не блокируются писателем (краул) — важно, чтобы
+            # подбор работал во время ночного обновления кэша.
+            c.execute("PRAGMA journal_mode=WAL")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS products (
                     url TEXT PRIMARY KEY,

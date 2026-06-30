@@ -441,13 +441,16 @@ class Pipeline:
         cat_path = category_for(spec.appliance)  # не None только для 6 типов
         filtered_url = build_category_url(base, spec)
 
-        # Кэш каталога: для 6 базовых типов отдаём кандидатов из БД (если свежо) —
-        # без браузера; фильтрацию по характеристикам делает селектор клиентски.
+        # Кэш каталога: отдаём кандидатов из БД (если свежо) — без браузера;
+        # фильтрацию по характеристикам делает селектор клиентски. Ключ — путь
+        # категории: для 6 базовых типов это cat_path, для прочих — category_url
+        # (резолвер). Краулер наполняет обе группы.
         cache = self._get_cache()
-        if cache and cat_path:
-            age = cache.category_age(cat_path)
+        cache_key = cat_path or spec.category_url
+        if cache and cache_key:
+            age = cache.category_age(cache_key)
             if age is not None and age < self._settings.catalog_cache_ttl:
-                candidates = cache.query_category(cat_path)
+                candidates = cache.query_category(cache_key)
 
         if not candidates and filtered_url:
             candidates = await ekrom.browse_url(filtered_url, page=page)

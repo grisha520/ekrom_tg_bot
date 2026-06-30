@@ -66,14 +66,33 @@ async def crawl_category(ek: EkromClient, base: str, path: str) -> list:
     return list(products.values())
 
 
+def _all_category_paths() -> list[str]:
+    """Все категории для краула: 6 базовых типов + весь каталог из categories.json."""
+    paths = list(CATEGORY_URLS.values())
+    seen = set(paths)
+    try:
+        from ..parsing.category_resolver import load_categories
+
+        for cat in load_categories():
+            url = (cat.get("url") or "").strip()
+            if url and url not in seen:
+                seen.add(url)
+                paths.append(url)
+    except Exception:  # noqa: BLE001 — без categories.json краулим хотя бы базовые
+        logger.exception("не удалось прочитать список категорий — краулю только базовые")
+    return paths
+
+
 async def crawl(settings: Settings | None = None) -> dict[str, int]:
-    """Наполнить кэш каталога (все страницы категорий). {путь: число_товаров}."""
+    """Наполнить кэш каталога (все категории сайта, все страницы). {путь: число}."""
     settings = settings or get_settings()
     base = settings.ekrom_base_url.rstrip("/")
     cache = CatalogCache(settings.catalog_db_path)
+    paths = _all_category_paths()
+    logger.info("категорий к обходу: %s", len(paths))
     results: dict[str, int] = {}
     async with EkromClient(settings) as ek:
-        for _appliance, path in CATEGORY_URLS.items():
+        for path in paths:
             try:
                 products = await crawl_category(ek, base, path)
             except Exception:  # noqa: BLE001 — одна категория не должна валить краул

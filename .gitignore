@@ -39,5 +39,7 @@ scripts/_*.py
 # Runtime manager allowlist (instance data)
 data/managers.json
 
-# Локальный кэш каталога (наполняется краулером)
+# Локальный кэш каталога (наполняется краулером); *-wal/*-shm от WAL-режима
 data/catalog.db
+data/catalog.db-wal
+data/catalog.db-shm
