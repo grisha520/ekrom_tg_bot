@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     pdf_font_path: str = Field(default="", alias="PDF_FONT_PATH")
     pdf_logo_path: str = Field(default="", alias="PDF_LOGO_PATH")
 
+    # Клиентский режим: бот открыт всем (клиент пишет сам), PDF — свой шаблон без
+    # партнёрской корзины, лид уходит менеджерам. Выкл — прежнее поведение «для
+    # менеджеров» (доступ по списку, PDF через корзину ekrom).
+    client_mode: bool = Field(default=False, alias="CLIENT_MODE")
+    # Лимиты на одного клиента (защита бюджета LLM от спама). 0 — без лимита.
+    client_rate_per_hour: int = Field(default=8, alias="CLIENT_RATE_PER_HOUR")
+    client_rate_per_day: int = Field(default=30, alias="CLIENT_RATE_PER_DAY")
+    # Уведомлять операторов (admin_user_ids) о новом клиентском запросе-лиде.
+    notify_lead: bool = Field(default=True, alias="NOTIFY_LEAD")
+
     @staticmethod
     def _parse_ids(raw: str) -> frozenset[int]:
         ids: set[int] = set()

@@ -42,7 +42,9 @@ from .ekrom.client import EkromAuthError, EkromCartError
 from .managers import ManagerStore
 from .messenger.telegram_format import format_selection
 from .models import SelectionResult
+from .pdf import build_offer_pdf
 from .pipeline import Pipeline
+from .ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +107,33 @@ def _is_admin(user_id: int | None) -> bool:
     return user_id is not None and user_id in get_settings().admin_user_ids
 
 
-def _user_allowed(user_id: int | None) -> bool:
+def _is_operator(user_id: int | None) -> bool:
+    """Оператор/менеджер — есть в allowlist или админ. Доступ к служебным функциям
+    (проверка/обновление входа ekrom, управление менеджерами)."""
     if user_id is None:
         return False
     return _managers().contains(user_id) or _is_admin(user_id)
+
+
+# Совместимость со старым именем (доступ оператора).
+_user_allowed = _is_operator
+
+
+def _can_use(user_id: int | None) -> bool:
+    """Может ли пользователь делать подбор. В клиентском режиме — все; иначе —
+    только операторы (прежнее поведение «бот для менеджеров»)."""
+    return get_settings().client_mode or _is_operator(user_id)
+
+
+_RATELIMIT: RateLimiter | None = None
+
+
+def _ratelimiter() -> RateLimiter:
+    global _RATELIMIT
+    if _RATELIMIT is None:
+        s = get_settings()
+        _RATELIMIT = RateLimiter(s.client_rate_per_hour, s.client_rate_per_day)
+    return _RATELIMIT
 
 
 # Запросы доступа, о которых уже уведомили админов (чтобы не спамить), и подписи
@@ -189,6 +214,35 @@ async def _deny(message: Message) -> None:
             logger.warning("не удалось уведомить админа %s", admin_id, exc_info=True)
 
 
+async def _notify_lead(message: Message, selection: SelectionResult) -> None:
+    """Уведомить операторов о новом запросе клиента (лид)."""
+    s = get_settings()
+    if not s.notify_lead or not s.admin_user_ids:
+        return
+    user = message.from_user
+    who = _user_label(user) if user else "аноним"
+    text = (message.text or "").strip()
+    if len(text) > 300:
+        text = text[:300] + "…"
+    if selection.matched:
+        result = f"подобрано {len(selection.matched)} поз., итог {int(selection.total_price)} ₽"
+    else:
+        result = "ничего не подобрано (спрос без результата)"
+    note = f"🧲 <b>Запрос клиента</b>\n{who}\n\n«{text}»\n\n{result}"
+    for admin_id in s.admin_user_ids:
+        try:
+            await message.bot.send_message(admin_id, note, parse_mode=ParseMode.HTML)
+        except Exception:  # noqa: BLE001 — не удалось уведомить одного оператора
+            logger.warning("не удалось отправить лид админу %s", admin_id, exc_info=True)
+
+
+def _rate_limit_text() -> str:
+    return (
+        "⏳ Вы отправили много запросов за короткое время.\n"
+        "Пожалуйста, попробуйте чуть позже — или напишите менеджеру, он поможет."
+    )
+
+
 # Кнопки постоянной клавиатуры (нажатие шлёт этот текст — ловим его в handle_text).
 BTN_STATUS = "🔁 Проверить вход"
 BTN_LOGIN = "🔐 Обновить вход"
@@ -209,6 +263,29 @@ def _main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         is_persistent=True,
         input_field_placeholder="Вставьте сообщение клиента…",
+    )
+
+
+def _client_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура для клиента — только подсказка (служебных кнопок клиенту нет)."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BTN_HELP)]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Опишите, какую технику ищете…",
+    )
+
+
+def _client_help_text() -> str:
+    shop = get_settings().shop_name
+    return (
+        f"👋 Здравствуйте! Это бот подбора техники <b>{shop}</b>.\n\n"
+        "Напишите, что вы ищете — можно одним сообщением и списком. Например:\n"
+        "• <i>духовой шкаф чёрный встраиваемый</i>\n"
+        "• <i>посудомойка 45 см и вытяжка 60 см</i>\n"
+        "• <i>холодильник до 60000</i>\n\n"
+        "Я подберу подходящие варианты с ценами и пришлю <b>PDF</b>. "
+        "Можно указывать цвет, размер, бюджет и бренд."
     )
 
 
@@ -278,13 +355,20 @@ def _pdf_keyboard(token: str) -> InlineKeyboardMarkup:
 
 async def cmd_start(message: Message) -> None:
     uid = message.from_user.id if message.from_user else None
-    if not _user_allowed(uid):
-        await _deny(message)
+    if _is_operator(uid):
+        admin = _is_admin(uid)
+        await message.answer(
+            _help_text(admin), parse_mode=ParseMode.HTML,
+            reply_markup=_main_keyboard(admin),
+        )
         return
-    admin = _is_admin(uid)
-    await message.answer(
-        _help_text(admin), parse_mode=ParseMode.HTML, reply_markup=_main_keyboard(admin)
-    )
+    if get_settings().client_mode:
+        await message.answer(
+            _client_help_text(), parse_mode=ParseMode.HTML,
+            reply_markup=_client_keyboard(),
+        )
+        return
+    await _deny(message)
 
 
 async def cmd_status(message: Message) -> None:
@@ -342,29 +426,40 @@ async def handle_text(message: Message) -> None:
     if not message.text or not message.chat:
         return
     uid = message.from_user.id if message.from_user else None
-    if not _user_allowed(uid):
+    if not _can_use(uid):
         await _deny(message)
         return
 
-    # Нажатия кнопок постоянной клавиатуры приходят как обычный текст — разводим
-    # их по действиям, не отдавая в подбор.
     text = message.text.strip()
-    if text == BTN_STATUS:
-        await cmd_status(message)
-        return
-    if text == BTN_LOGIN:
-        await cmd_login(message)
-        return
+    op = _is_operator(uid)
+
+    # Справка доступна всем (для клиента — клиентская версия, см. cmd_start).
     if text == BTN_HELP:
         await cmd_start(message)
         return
-    admin = _is_admin(uid)
-    if admin and text == BTN_MANAGERS:
-        await _show_managers(message)
-        return
-    if admin and text.isdigit():
-        await _ask_add(message, int(text))
-        return
+    # Служебные кнопки — только операторам (клиент их не видит; случайный ввод
+    # такого текста клиентом уходит в обычный подбор).
+    if op:
+        if text == BTN_STATUS:
+            await cmd_status(message)
+            return
+        if text == BTN_LOGIN:
+            await cmd_login(message)
+            return
+        if _is_admin(uid) and text == BTN_MANAGERS:
+            await _show_managers(message)
+            return
+        if _is_admin(uid) and text.isdigit():
+            await _ask_add(message, int(text))
+            return
+
+    # Лимит запросов для клиентов (операторов не ограничиваем).
+    if get_settings().client_mode and not op and uid is not None:
+        rl = _ratelimiter()
+        if not rl.allowed(uid):
+            await message.answer(_rate_limit_text())
+            return
+        rl.hit(uid)
 
     chat_id = message.chat.id
     lock = _chat_lock(chat_id)
@@ -388,12 +483,17 @@ async def handle_text(message: Message) -> None:
             request = pipeline.parse_message(message.text.strip())
         except (ValueError, ValidationError):
             await status.edit_text(
+                "🤔 Не понял запрос. Напишите, какую технику ищете — например "
+                "«духовой шкаф чёрный» или «посудомойка 45 см»."
+                if not op else
                 "❌ Не удалось разобрать сообщение.\n"
                 "Попробуйте оформить позиции нумерованным списком."
             )
             return
         except Exception:  # noqa: BLE001
             await status.edit_text(
+                "⚙️ Сервис временно недоступен. Попробуйте, пожалуйста, чуть позже."
+                if not op else
                 "❌ Сервис разбора недоступен (Groq / сеть).\n"
                 "Проверьте GROQ_API_KEY в .env."
             )
@@ -411,6 +511,31 @@ async def handle_text(message: Message) -> None:
         if len(preview) > 4000:
             preview = preview[:3990] + "…"
 
+        # Клиентский режим: свой PDF без корзины ekrom, авто-отправка + лид.
+        if get_settings().client_mode and not op:
+            if selection.matched:
+                await status.edit_text(preview, parse_mode=ParseMode.HTML)
+                try:
+                    pdf_path = await asyncio.to_thread(
+                        build_offer_pdf, selection, get_settings()
+                    )
+                    await message.answer_document(
+                        FSInputFile(pdf_path), caption="📄 Ваш подбор"
+                    )
+                except Exception:  # noqa: BLE001 — PDF не критичен, превью клиент уже видит
+                    logger.exception("client offer pdf failed")
+                    await message.answer(
+                        "Подбор выше. PDF сформировать не удалось — менеджер пришлёт его отдельно."
+                    )
+            else:
+                await status.edit_text(
+                    "😔 По вашему запросу подходящих вариантов не нашлось.\n"
+                    "Попробуйте переформулировать или напишите менеджеру — поможем подобрать.",
+                )
+            await _notify_lead(message, selection)
+            return
+
+        # Операторский режим: превью + кнопка PDF (через корзину ekrom).
         token = uuid.uuid4().hex
         _STORE[token] = _Pending(selection=selection)
 
@@ -606,7 +731,7 @@ async def main() -> None:
     settings = get_settings()
     if not settings.telegram_bot_token:
         raise SystemExit("TELEGRAM_BOT_TOKEN не задан — заполните .env")
-    if not settings.allowed_telegram_user_ids:
+    if not settings.client_mode and not settings.allowed_telegram_user_ids:
         raise SystemExit("TELEGRAM_ALLOWED_IDS не задан — укажите user_id менеджеров")
 
     bot = _make_bot(settings)
