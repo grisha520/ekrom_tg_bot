@@ -49,6 +49,17 @@ _HIDE_ATTRS = {
     "модель",
     "страна производитель",
 }
+# Подстроки ключей, которые пропускаем как малополезные/дублирующие для клиента
+# (габариты «встраивания» дублируют основные размеры, гарантия/вес/коды — шум).
+_SKIP_ATTR_SUBSTR = ("встраивания", "гарант", "вес", "артикул", "код ", "серия")
+# Приоритет показа: клиентски значимые характеристики идут первыми. Ключи
+# сверяются по подстроке (регистр не важен), порядок = приоритет.
+_PRIORITY_ATTRS = (
+    "цвет", "тип установки", "объ", "комплект", "загрузка", "конфор",
+    "вид вароч", "тип вароч", "тип нагрева", "поверхност", "класс энерг",
+    "программ", "производительность", "мощност", "уровень шума", "управлени",
+    "дисплей", "ширина",
+)
 _MAX_ATTRS = 6  # сколько характеристик максимум выводим на позицию
 _FONT = "Body"
 _FONT_BOLD = "Body-Bold"
@@ -127,19 +138,31 @@ def _fmt_price(value: float | None) -> str:
     return f"{int(round(value)):,}".replace(",", " ") + " ₽"  # ₽
 
 
+def _attr_rank(key: str) -> int:
+    kl = key.lower()
+    for i, p in enumerate(_PRIORITY_ATTRS):
+        if p in kl:
+            return i
+    return len(_PRIORITY_ATTRS)
+
+
 def _attrs_line(attrs: dict[str, str]) -> str:
-    """Короткая строка ключевых характеристик товара для клиента."""
-    parts: list[str] = []
+    """Короткая строка ключевых характеристик товара для клиента.
+
+    Сначала клиентски значимые (цвет, объём, тип, программы…), затем остальное;
+    служебные поля и дубли-«встраивания» отсекаются. Не более _MAX_ATTRS штук.
+    """
+    visible: list[tuple[str, str]] = []
     for key, val in (attrs or {}).items():
-        if key.lower() in _HIDE_ATTRS:
+        kl = key.lower()
+        if kl in _HIDE_ATTRS or any(s in kl for s in _SKIP_ATTR_SUBSTR):
             continue
         clean = (val or "").replace("\n", ", ").strip().strip(",")
-        if not clean:
-            continue
-        parts.append(f"{key}: {clean}")
-        if len(parts) >= _MAX_ATTRS:
-            break
-    return "  ·  ".join(parts)  # ·
+        if clean:
+            visible.append((key, clean))
+    # Стабильная сортировка по приоритету (внутри ранга — исходный порядок).
+    visible.sort(key=lambda kv: _attr_rank(kv[0]))
+    return "  ·  ".join(f"{k}: {v}" for k, v in visible[:_MAX_ATTRS])  # ·
 
 
 def _styles() -> dict[str, ParagraphStyle]:

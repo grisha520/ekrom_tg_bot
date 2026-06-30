@@ -69,6 +69,23 @@ def test_build_offer_pdf_creates_readable_file(tmp_path):
     assert "Lex HUBBLE 600" in text
 
 
+def test_attrs_line_prioritizes_useful_and_skips_embed_dims():
+    attrs = {
+        "Ширина встраивания, мм": "560",
+        "Высота встраивания, мм": "585",
+        "Глубина, мм": "550",
+        "Высота, мм": "595",
+        "Цвет": "Чёрный",
+        "Количество программ": "8",
+        "Объем, л": "71",
+    }
+    line = _attrs_line(attrs)
+    assert "встраивания" not in line  # дубли-габариты отсекаются
+    assert line.startswith("Цвет: Чёрный")  # приоритетные первыми
+    assert "Объем, л: 71" in line
+    assert "Количество программ: 8" in line
+
+
 def test_attrs_line_hides_service_fields_and_limits():
     line = _attrs_line(
         {
