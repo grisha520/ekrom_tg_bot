@@ -6,7 +6,31 @@ import pytest
 
 from max_ekrom_bot.config import Settings
 from max_ekrom_bot.models import ProductSpec
-from max_ekrom_bot.parsing.category_resolver import CategoryResolver, load_categories
+from max_ekrom_bot.parsing.category_resolver import (
+    CategoryResolver,
+    _top_level_categories,
+    load_categories,
+)
+
+
+def test_top_level_filter_drops_subcategories():
+    cats = (
+        {"url": "/catalog/kukhnya/vinnye_shkafy/", "name": "Винные шкафы"},
+        {"url": "/catalog/kukhnya/vinnye_shkafy/vstraivaemye/", "name": "Встраиваемые"},
+        {"url": "/catalog/kukhnya/vinnye_shkafy/otdelnostoyashchie/", "name": "Отдельностоящие"},
+        {"url": "/catalog/kukhnya/morozilnye_kamery/", "name": "Морозильные камеры"},
+    )
+    kept = _top_level_categories(cats)
+    names = {c["name"] for c in kept}
+    assert names == {"Винные шкафы", "Морозильные камеры"}
+
+
+def test_resolver_uses_only_top_level_categories():
+    # На реальном снимке резолвер должен держать меньше категорий, чем всего
+    # (подкатегории отброшены), но не пусто.
+    full = load_categories()
+    r = CategoryResolver(settings=Settings(LLM_PROVIDER="rule"))
+    assert 0 < len(r._cats) < len(full)
 
 
 class FakeLLM:

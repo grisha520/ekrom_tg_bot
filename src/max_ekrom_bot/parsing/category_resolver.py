@@ -55,13 +55,36 @@ def _label(cat: dict) -> str:
     return f"{path} / {cat['name']}" if path else cat["name"]
 
 
+def _top_level_categories(cats: tuple[dict, ...]) -> tuple[dict, ...]:
+    """Оставить только родительские категории (убрать подкатегории, чьё URL
+    вложено в другую категорию списка).
+
+    Подкатегории на ekrom часто имеют обезличенные имена («Отдельностоящие»,
+    «Встраиваемые», «Комбинированные») и дублируются под многими разделами —
+    это путает LLM при выборе. Родительские имена различимы («Винные шкафы»,
+    «Морозильные камеры»), а конкретный подтип (встраив./отдельностоящий) потом
+    доберёт селектор по характеристикам товара.
+    """
+    urls = [c["url"].rstrip("/") for c in cats if c.get("url")]
+    kept: list[dict] = []
+    for c in cats:
+        u = (c.get("url") or "").rstrip("/")
+        if not u:
+            continue
+        if any(u != other and u.startswith(other + "/") for other in urls):
+            continue  # это подкатегория другой категории — пропускаем
+        kept.append(c)
+    return tuple(kept)
+
+
 class CategoryResolver:
     """Заполняет category_url/category_name у позиций через один вызов LLM."""
 
     def __init__(self, llm: LLMProvider | None = None, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
         self._llm = llm
-        self._cats = load_categories()
+        # Только родительские категории — различимые имена, меньше путаницы у LLM.
+        self._cats = _top_level_categories(load_categories())
 
     def _get_llm(self) -> LLMProvider:
         if self._llm is None:
