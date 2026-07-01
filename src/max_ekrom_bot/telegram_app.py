@@ -20,7 +20,7 @@ from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.enums import ParseMode
+from aiogram.enums import ChatAction, ParseMode
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.types import (
@@ -40,6 +40,26 @@ from pydantic import ValidationError
 from .config import Settings, get_settings
 from .ekrom.client import EkromAuthError, EkromCartError
 from .managers import ManagerStore
+from .messenger.client_ux import (
+    BTN_CONTACTS,
+    BTN_EXAMPLES,
+    BTN_HELP,
+    EXAMPLE_QUERIES,
+    client_status_parse,
+    client_status_pdf,
+    client_status_select,
+    contacts_text,
+    empty_result_text,
+    examples_inline_keyboard,
+    examples_text,
+    followup_keyboard,
+    followup_text,
+    format_client_selection,
+    is_smalltalk,
+    pdf_caption,
+    smalltalk_reply,
+    welcome_text,
+)
 from .messenger.telegram_format import format_selection
 from .models import SelectionResult
 from .pdf import build_offer_pdf
@@ -243,10 +263,9 @@ def _rate_limit_text() -> str:
     )
 
 
-# Кнопки постоянной клавиатуры (нажатие шлёт этот текст — ловим его в handle_text).
+# Кнопки постоянной клавиатуры оператора (нажатие шлёт этот текст).
 BTN_STATUS = "🔁 Проверить вход"
 BTN_LOGIN = "🔐 Обновить вход"
-BTN_HELP = "ℹ️ Как пользоваться"
 BTN_MANAGERS = "👥 Менеджеры"
 
 
@@ -267,25 +286,15 @@ def _main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 
 def _client_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура для клиента — только подсказка (служебных кнопок клиенту нет)."""
+    """Клавиатура клиента: примеры, справка, контакты."""
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=BTN_HELP)]],
+        keyboard=[
+            [KeyboardButton(text=BTN_EXAMPLES), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_CONTACTS)],
+        ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Опишите, какую технику ищете…",
-    )
-
-
-def _client_help_text() -> str:
-    shop = get_settings().shop_name
-    return (
-        f"👋 Здравствуйте! Это бот подбора техники <b>{shop}</b>.\n\n"
-        "Напишите, что вы ищете — можно одним сообщением и списком. Например:\n"
-        "• <i>духовой шкаф чёрный встраиваемый</i>\n"
-        "• <i>посудомойка 45 см и вытяжка 60 см</i>\n"
-        "• <i>холодильник до 60000</i>\n\n"
-        "Я подберу подходящие варианты с ценами и пришлю <b>PDF</b>. "
-        "Можно указывать цвет, размер, бюджет и бренд."
+        input_field_placeholder="Опишите технику — цвет, размер, бюджет…",
     )
 
 
@@ -363,12 +372,43 @@ async def cmd_start(message: Message) -> None:
         )
         return
     if get_settings().client_mode:
+        s = get_settings()
         await message.answer(
-            _client_help_text(), parse_mode=ParseMode.HTML,
+            welcome_text(s),
+            parse_mode=ParseMode.HTML,
             reply_markup=_client_keyboard(),
+            disable_web_page_preview=True,
+        )
+        await message.answer(
+            "👇 Быстрый старт — нажмите пример:",
+            reply_markup=examples_inline_keyboard(),
         )
         return
     await _deny(message)
+
+
+async def cmd_examples(message: Message) -> None:
+    if not get_settings().client_mode or _is_operator(message.from_user.id if message.from_user else None):
+        await cmd_start(message)
+        return
+    await message.answer(
+        examples_text(),
+        parse_mode=ParseMode.HTML,
+        reply_markup=examples_inline_keyboard(),
+    )
+
+
+async def cmd_contacts(message: Message) -> None:
+    if not get_settings().client_mode or _is_operator(message.from_user.id if message.from_user else None):
+        await cmd_start(message)
+        return
+    s = get_settings()
+    await message.answer(
+        contacts_text(s),
+        parse_mode=ParseMode.HTML,
+        reply_markup=followup_keyboard(s),
+        disable_web_page_preview=True,
+    )
 
 
 async def cmd_status(message: Message) -> None:
@@ -432,13 +472,18 @@ async def handle_text(message: Message) -> None:
 
     text = message.text.strip()
     op = _is_operator(uid)
+    client = get_settings().client_mode and not op
 
-    # Справка доступна всем (для клиента — клиентская версия, см. cmd_start).
     if text == BTN_HELP:
         await cmd_start(message)
         return
-    # Служебные кнопки — только операторам (клиент их не видит; случайный ввод
-    # такого текста клиентом уходит в обычный подбор).
+    if client and text == BTN_EXAMPLES:
+        await cmd_examples(message)
+        return
+    if client and text == BTN_CONTACTS:
+        await cmd_contacts(message)
+        return
+
     if op:
         if text == BTN_STATUS:
             await cmd_status(message)
@@ -453,14 +498,25 @@ async def handle_text(message: Message) -> None:
             await _ask_add(message, int(text))
             return
 
-    # Лимит запросов для клиентов (операторов не ограничиваем).
-    if get_settings().client_mode and not op and uid is not None:
+    if client and is_smalltalk(text):
+        await message.answer(
+            smalltalk_reply(get_settings().shop_name),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if client and uid is not None:
         rl = _ratelimiter()
         if not rl.allowed(uid):
             await message.answer(_rate_limit_text())
             return
         rl.hit(uid)
 
+    await _run_pick(message, text, op=op, client=client)
+
+
+async def _run_pick(message: Message, text: str, *, op: bool, client: bool) -> None:
+    """Разбор запроса → подбор → PDF (клиент) или превью+кнопка (оператор)."""
     chat_id = message.chat.id
     lock = _chat_lock(chat_id)
     if lock.locked():
@@ -468,80 +524,93 @@ async def handle_text(message: Message) -> None:
         return
 
     async with lock:
-        # Без reply-клавиатуры: это сообщение затем редактируется (edit_text)
-        # и на него навешивается inline-кнопка PDF. Telegram не позволяет
-        # editMessageText для сообщения, отправленного с ReplyKeyboardMarkup
-        # («message can't be edited»). Постоянная клавиатура и так висит с /start.
-        status = await message.answer(
-            "⏳ Разбираю запрос и подбираю товары на ekrom…\n"
-            "<i>Обычно 30 секунд.</i>",
-            parse_mode=ParseMode.HTML,
+        await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
+        status_text = (
+            client_status_parse() if client else
+            "⏳ Разбираю запрос и подбираю товары на ekrom…\n<i>Обычно 30 секунд.</i>"
         )
+        status = await message.answer(status_text, parse_mode=ParseMode.HTML)
         pipeline = Pipeline(get_settings())
 
         try:
-            request = pipeline.parse_message(message.text.strip())
+            request = pipeline.parse_message(text)
         except (ValueError, ValidationError):
-            await status.edit_text(
-                "🤔 Не понял запрос. Напишите, какую технику ищете — например "
-                "«духовой шкаф чёрный» или «посудомойка 45 см»."
-                if not op else
+            err = (
+                "🤔 Не понял запрос. Напишите, какую технику ищете — или нажмите 💡 Примеры."
+                if client else
                 "❌ Не удалось разобрать сообщение.\n"
                 "Попробуйте оформить позиции нумерованным списком."
             )
+            await status.edit_text(err)
             return
         except Exception:  # noqa: BLE001
-            await status.edit_text(
+            err = (
                 "⚙️ Сервис временно недоступен. Попробуйте, пожалуйста, чуть позже."
-                if not op else
+                if client else
                 "❌ Сервис разбора недоступен (Groq / сеть).\n"
                 "Проверьте GROQ_API_KEY в .env."
             )
+            await status.edit_text(err)
             return
 
-        # В клиентском режиме дочитываем характеристики и фото выбранных товаров —
-        # для богатого PDF (как в корзинном). Операторам это не нужно (у них PDF
-        # из корзины), поэтому не тратим время.
-        client_flow = get_settings().client_mode and not op
+        if client:
+            await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await status.edit_text(client_status_select(), parse_mode=ParseMode.HTML)
+
         try:
             async with _EKROM_LOCK:
                 selection = await pipeline.select_products(
-                    request, enrich_chosen=client_flow
+                    request, enrich_chosen=client
                 )
         except Exception:  # noqa: BLE001
             logger.exception("select_products failed")
-            await status.edit_text("❌ Ошибка при подборе на ekrom. Попробуйте позже.")
+            err = (
+                "😔 Не удалось подобрать сейчас. Попробуйте через минуту или напишите менеджеру."
+                if client else
+                "❌ Ошибка при подборе на ekrom. Попробуйте позже."
+            )
+            await status.edit_text(err)
             return
 
-        preview = format_selection(selection)
+        preview = (
+            format_client_selection(selection, get_settings().shop_name)
+            if client else format_selection(selection)
+        )
         if len(preview) > 4000:
             preview = preview[:3990] + "…"
 
-        # Клиентский режим: свой PDF без корзины ekrom, авто-отправка + лид.
-        if get_settings().client_mode and not op:
+        if client:
             if selection.matched:
                 await status.edit_text(preview, parse_mode=ParseMode.HTML)
+                await message.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
+                pdf_status = await message.answer(
+                    client_status_pdf(), parse_mode=ParseMode.HTML
+                )
                 try:
                     pdf_path = await asyncio.to_thread(
                         build_offer_pdf, selection, get_settings()
                     )
                     await message.answer_document(
-                        FSInputFile(pdf_path), caption="📄 Ваш подбор"
+                        FSInputFile(pdf_path), caption=pdf_caption()
                     )
-                except Exception:  # noqa: BLE001 — PDF не критичен, превью клиент уже видит
+                    await pdf_status.delete()
+                except Exception:  # noqa: BLE001
                     logger.exception("client offer pdf failed")
-                    await message.answer(
-                        "Подбор выше. PDF сформировать не удалось — менеджер пришлёт его отдельно."
+                    await pdf_status.edit_text(
+                        "Подбор выше 👆 PDF не удалось собрать — менеджер пришлёт отдельно."
                     )
-            else:
-                await status.edit_text(
-                    "😔 По вашему запросу подходящих вариантов не нашлось.\n"
-                    "Попробуйте переформулировать или напишите менеджеру — поможем подобрать.",
+                s = get_settings()
+                await message.answer(
+                    followup_text(s),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=followup_keyboard(s),
+                    disable_web_page_preview=True,
                 )
+            else:
+                await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
             await _notify_lead(message, selection)
             return
 
-        # Операторский режим: превью + кнопка PDF (через корзину ekrom).
         token = uuid.uuid4().hex
         _STORE[token] = _Pending(selection=selection)
 
@@ -618,6 +687,44 @@ async def callback_pdf(callback: CallbackQuery) -> None:
             FSInputFile(path),
             caption=f"Подбор ekrom ({path.name})",
         )
+
+
+async def callback_example(callback: CallbackQuery) -> None:
+    """Клиент нажал готовый пример — запускаем подбор."""
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    uid = callback.from_user.id if callback.from_user else None
+    if not get_settings().client_mode or _is_operator(uid):
+        await callback.answer()
+        return
+
+    if callback.data == "ex:menu":
+        await callback.answer()
+        await callback.message.answer(
+            examples_text(),
+            parse_mode=ParseMode.HTML,
+            reply_markup=examples_inline_keyboard(),
+        )
+        return
+
+    try:
+        idx = int(callback.data.removeprefix("ex:"))
+        query = EXAMPLE_QUERIES[idx]
+    except (ValueError, IndexError):
+        await callback.answer()
+        return
+
+    await callback.answer("Подбираю…")
+    op = _is_operator(uid)
+    client = get_settings().client_mode and not op
+    if client and uid is not None:
+        rl = _ratelimiter()
+        if not rl.allowed(uid):
+            await callback.message.answer(_rate_limit_text())
+            return
+        rl.hit(uid)
+    await _run_pick(callback.message, query, op=op, client=client)
 
 
 async def callback_manage(callback: CallbackQuery) -> None:
@@ -714,10 +821,13 @@ def _build_dispatcher() -> Dispatcher:
     dp.message.outer_middleware.register(access_log)
     dp.callback_query.outer_middleware.register(access_log)
     dp.message.register(cmd_start, Command("start"))
+    dp.message.register(cmd_examples, Command("examples"))
+    dp.message.register(cmd_contacts, Command("contacts"))
     dp.message.register(cmd_status, Command("status"))
     dp.message.register(cmd_login, Command("login"))
     dp.message.register(handle_text, F.text & ~F.text.startswith("/"))
     dp.callback_query.register(callback_pdf, F.data.startswith("pdf:"))
+    dp.callback_query.register(callback_example, F.data.startswith("ex:"))
     dp.callback_query.register(
         callback_manage,
         lambda q: bool(q.data) and q.data.split(":", 1)[0] in {"addmgr", "delmgr", "denymgr"},
@@ -743,11 +853,19 @@ async def main() -> None:
     bot = _make_bot(settings)
     await _wait_telegram(bot)
     try:
-        await bot.set_my_commands([
-            BotCommand(command="start", description="ℹ️ Как пользоваться"),
-            BotCommand(command="status", description="🔁 Проверить вход в ekrom"),
-            BotCommand(command="login", description="🔐 Обновить вход в ekrom"),
-        ])
+        if settings.client_mode:
+            commands = [
+                BotCommand(command="start", description="🏠 Начать"),
+                BotCommand(command="examples", description="💡 Примеры запросов"),
+                BotCommand(command="contacts", description="📞 Контакты магазина"),
+            ]
+        else:
+            commands = [
+                BotCommand(command="start", description="ℹ️ Как пользоваться"),
+                BotCommand(command="status", description="🔁 Проверить вход в ekrom"),
+                BotCommand(command="login", description="🔐 Обновить вход в ekrom"),
+            ]
+        await bot.set_my_commands(commands)
     except Exception:  # noqa: BLE001 — меню команд не критично
         logger.warning("не удалось установить меню команд", exc_info=True)
     dp = _build_dispatcher()
