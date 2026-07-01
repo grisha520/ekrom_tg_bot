@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import html
 import re
+from datetime import datetime, timedelta, timezone
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+_MSK = timezone(timedelta(hours=3))
+
 from ..config import Settings
 from ..models import SelectionResult
+from ..pick_history import PickRecord
 from .telegram_format import _fmt_price, format_selection
 
 # Готовые запросы для кнопок «Примеры» (callback ex:0 … ex:N-1).
@@ -21,6 +25,7 @@ EXAMPLE_QUERIES: tuple[str, ...] = (
 BTN_EXAMPLES = "💡 Примеры"
 BTN_CONTACTS = "📞 Контакты"
 BTN_HELP = "ℹ️ Как пользоваться"
+BTN_HISTORY = "📂 Мои подборы"
 
 _SMALLTALK = (
     "привет", "здравств", "добрый", "доброе", "hello", "hi", "hey",
@@ -66,6 +71,7 @@ def welcome_text(settings: Settings) -> str:
         "• <i>духовой шкаф чёрный встраиваемый</i>\n"
         "• <i>посудомойка 45 см и вытяжка 60 см</i>\n"
         "• <i>холодильник до 60000</i>\n\n"
+        "📂 Готовые подборы — кнопка <b>Мои подборы</b> или /history\n\n"
         f"🌐 Каталог: <a href=\"{site}\">{site}</a>"
     )
 
@@ -128,6 +134,7 @@ def followup_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     if tel:
         rows.append([InlineKeyboardButton(text="📞 Позвонить", url=tel)])
     rows.append([InlineKeyboardButton(text="💡 Ещё примеры", callback_data="ex:menu")])
+    rows.append([InlineKeyboardButton(text=BTN_HISTORY, callback_data="hist:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -206,3 +213,43 @@ def empty_result_text() -> str:
 
 def pdf_caption() -> str:
     return "📄 Ваш подбор в PDF — удобно сохранить или переслать"
+
+
+def _fmt_msk(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=_MSK).strftime("%d.%m %H:%M")
+
+
+def _short_query(text: str, max_len: int = 40) -> str:
+    t = text.replace("\n", " ").strip()
+    return t if len(t) <= max_len else t[: max_len - 1] + "…"
+
+
+def format_history_list(records: list[PickRecord]) -> str:
+    if not records:
+        return (
+            "📂 <b>Мои подборы</b>\n\n"
+            "Пока пусто — после первого подбора с PDF записи появятся здесь."
+        )
+    lines = [
+        "📂 <b>Мои подборы</b>",
+        "",
+        "Нажмите кнопку, чтобы снова получить PDF:",
+        "",
+    ]
+    for i, rec in enumerate(records, 1):
+        date = _fmt_msk(rec.created_at)
+        q = html.escape(_short_query(rec.query_text))
+        price = _fmt_price(rec.total_price)
+        lines.append(f"{i}. <b>{date}</b> · {q}\n   {price}")
+    lines.append("\n<i>Храним последние 20 подборов за 30 дней.</i>")
+    return "\n".join(lines)
+
+
+def history_inline_keyboard(records: list[PickRecord]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for rec in records:
+        label = f"📄 {_fmt_msk(rec.created_at)} · {_short_query(rec.query_text, 22)}"
+        rows.append([
+            InlineKeyboardButton(text=label[:64], callback_data=f"hist:{rec.id}"),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

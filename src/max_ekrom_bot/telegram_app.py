@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,7 @@ from aiogram.types import (
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import ValidationError
 
+from .bot_metrics import BotMetricsStore, format_admin_stats
 from .config import Settings, get_settings
 from .ekrom.client import EkromAuthError, EkromCartError
 from .managers import ManagerStore
@@ -44,6 +46,7 @@ from .messenger.client_ux import (
     BTN_CONTACTS,
     BTN_EXAMPLES,
     BTN_HELP,
+    BTN_HISTORY,
     EXAMPLE_QUERIES,
     client_status_parse,
     client_status_pdf,
@@ -55,6 +58,8 @@ from .messenger.client_ux import (
     followup_keyboard,
     followup_text,
     format_client_selection,
+    format_history_list,
+    history_inline_keyboard,
     is_smalltalk,
     pdf_caption,
     smalltalk_reply,
@@ -63,6 +68,7 @@ from .messenger.client_ux import (
 from .messenger.telegram_format import format_selection
 from .models import SelectionResult
 from .pdf import build_offer_pdf
+from .pick_history import PickHistoryStore
 from .pipeline import Pipeline
 from .ratelimit import RateLimiter
 
@@ -146,6 +152,8 @@ def _can_use(user_id: int | None) -> bool:
 
 
 _RATELIMIT: RateLimiter | None = None
+_HISTORY: PickHistoryStore | None = None
+_METRICS: BotMetricsStore | None = None
 
 
 def _ratelimiter() -> RateLimiter:
@@ -154,6 +162,45 @@ def _ratelimiter() -> RateLimiter:
         s = get_settings()
         _RATELIMIT = RateLimiter(s.client_rate_per_hour, s.client_rate_per_day)
     return _RATELIMIT
+
+
+def _history() -> PickHistoryStore:
+    global _HISTORY
+    if _HISTORY is None:
+        s = get_settings()
+        _HISTORY = PickHistoryStore(s.analytics_db_path, s.pick_history_dir)
+    return _HISTORY
+
+
+def _metrics() -> BotMetricsStore:
+    global _METRICS
+    if _METRICS is None:
+        _METRICS = BotMetricsStore(get_settings().analytics_db_path)
+    return _METRICS
+
+
+def _record_pick_metric(
+    user_id: int | None,
+    *,
+    client: bool,
+    success: bool,
+    matched_count: int,
+    duration_sec: float,
+    queue_wait_sec: float,
+) -> None:
+    if user_id is None:
+        return
+    try:
+        _metrics().record(
+            user_id=user_id,
+            is_client=client,
+            success=success,
+            matched_count=matched_count,
+            duration_sec=duration_sec,
+            queue_wait_sec=queue_wait_sec,
+        )
+    except Exception:  # noqa: BLE001 — метрики не критичны
+        logger.warning("не удалось записать метрику", exc_info=True)
 
 
 # Запросы доступа, о которых уже уведомили админов (чтобы не спамить), и подписи
@@ -267,6 +314,7 @@ def _rate_limit_text() -> str:
 BTN_STATUS = "🔁 Проверить вход"
 BTN_LOGIN = "🔐 Обновить вход"
 BTN_MANAGERS = "👥 Менеджеры"
+BTN_STATS = "📊 Статистика"
 
 
 def _main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
@@ -276,7 +324,7 @@ def _main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_HELP)],
     ]
     if is_admin:
-        rows.append([KeyboardButton(text=BTN_MANAGERS)])
+        rows.append([KeyboardButton(text=BTN_MANAGERS), KeyboardButton(text=BTN_STATS)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -290,7 +338,7 @@ def _client_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_EXAMPLES), KeyboardButton(text=BTN_HELP)],
-            [KeyboardButton(text=BTN_CONTACTS)],
+            [KeyboardButton(text=BTN_HISTORY), KeyboardButton(text=BTN_CONTACTS)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -312,6 +360,7 @@ def _help_text(is_admin: bool = False) -> str:
     if is_admin:
         text += (
             f"{BTN_MANAGERS} — список менеджеров, добавить/удалить\n"
+            f"{BTN_STATS} — нагрузка и время подбора (сегодня)\n"
             "\n<i>Когда новый человек напишет боту — вам придёт кнопка «Добавить».</i>\n"
         )
     return text + "\nПодбор занимает ~30 с, PDF ещё ~30 с."
@@ -411,6 +460,37 @@ async def cmd_contacts(message: Message) -> None:
     )
 
 
+async def _show_client_history(message: Message) -> None:
+    uid = message.from_user.id if message.from_user else None
+    if uid is None:
+        return
+    records = _history().list_for_user(uid, limit=10)
+    await message.answer(
+        format_history_list(records),
+        parse_mode=ParseMode.HTML,
+        reply_markup=history_inline_keyboard(records) if records else None,
+    )
+
+
+async def cmd_history(message: Message) -> None:
+    if not get_settings().client_mode or _is_operator(message.from_user.id if message.from_user else None):
+        await cmd_start(message)
+        return
+    await _show_client_history(message)
+
+
+async def cmd_stats(message: Message) -> None:
+    if not _is_admin(message.from_user.id if message.from_user else None):
+        await message.answer("Только для администратора.")
+        return
+    try:
+        stats = _metrics().stats()
+        await message.answer(format_admin_stats(stats), parse_mode=ParseMode.HTML)
+    except Exception:  # noqa: BLE001
+        logger.exception("stats failed")
+        await message.answer("Не удалось собрать статистику.")
+
+
 async def cmd_status(message: Message) -> None:
     if not _user_allowed(message.from_user.id if message.from_user else None):
         await _deny(message)
@@ -483,6 +563,9 @@ async def handle_text(message: Message) -> None:
     if client and text == BTN_CONTACTS:
         await cmd_contacts(message)
         return
+    if client and text == BTN_HISTORY:
+        await cmd_history(message)
+        return
 
     if op:
         if text == BTN_STATUS:
@@ -493,6 +576,9 @@ async def handle_text(message: Message) -> None:
             return
         if _is_admin(uid) and text == BTN_MANAGERS:
             await _show_managers(message)
+            return
+        if _is_admin(uid) and text == BTN_STATS:
+            await cmd_stats(message)
             return
         if _is_admin(uid) and text.isdigit():
             await _ask_add(message, int(text))
@@ -517,6 +603,12 @@ async def handle_text(message: Message) -> None:
 
 async def _run_pick(message: Message, text: str, *, op: bool, client: bool) -> None:
     """Разбор запроса → подбор → PDF (клиент) или превью+кнопка (оператор)."""
+    uid = message.from_user.id if message.from_user else None
+    t0 = time.perf_counter()
+    queue_wait = 0.0
+    success = False
+    matched_count = 0
+
     chat_id = message.chat.id
     lock = _chat_lock(chat_id)
     if lock.locked():
@@ -524,104 +616,127 @@ async def _run_pick(message: Message, text: str, *, op: bool, client: bool) -> N
         return
 
     async with lock:
-        await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
-        status_text = (
-            client_status_parse() if client else
-            "⏳ Разбираю запрос и подбираю товары на ekrom…\n<i>Обычно 30 секунд.</i>"
-        )
-        status = await message.answer(status_text, parse_mode=ParseMode.HTML)
-        pipeline = Pipeline(get_settings())
-
         try:
-            request = pipeline.parse_message(text)
-        except (ValueError, ValidationError):
-            err = (
-                "🤔 Не понял запрос. Напишите, какую технику ищете — или нажмите 💡 Примеры."
-                if client else
-                "❌ Не удалось разобрать сообщение.\n"
-                "Попробуйте оформить позиции нумерованным списком."
-            )
-            await status.edit_text(err)
-            return
-        except Exception:  # noqa: BLE001
-            err = (
-                "⚙️ Сервис временно недоступен. Попробуйте, пожалуйста, чуть позже."
-                if client else
-                "❌ Сервис разбора недоступен (Groq / сеть).\n"
-                "Проверьте GROQ_API_KEY в .env."
-            )
-            await status.edit_text(err)
-            return
-
-        if client:
             await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
-            await status.edit_text(client_status_select(), parse_mode=ParseMode.HTML)
-
-        try:
-            async with _EKROM_LOCK:
-                selection = await pipeline.select_products(
-                    request, enrich_chosen=client
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception("select_products failed")
-            err = (
-                "😔 Не удалось подобрать сейчас. Попробуйте через минуту или напишите менеджеру."
-                if client else
-                "❌ Ошибка при подборе на ekrom. Попробуйте позже."
+            status_text = (
+                client_status_parse() if client else
+                "⏳ Разбираю запрос и подбираю товары на ekrom…\n<i>Обычно 30 секунд.</i>"
             )
-            await status.edit_text(err)
-            return
+            status = await message.answer(status_text, parse_mode=ParseMode.HTML)
+            pipeline = Pipeline(get_settings())
 
-        preview = (
-            format_client_selection(selection, get_settings().shop_name)
-            if client else format_selection(selection)
-        )
-        if len(preview) > 4000:
-            preview = preview[:3990] + "…"
-
-        if client:
-            if selection.matched:
-                await status.edit_text(preview, parse_mode=ParseMode.HTML)
-                await message.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
-                pdf_status = await message.answer(
-                    client_status_pdf(), parse_mode=ParseMode.HTML
+            try:
+                request = pipeline.parse_message(text)
+            except (ValueError, ValidationError):
+                err = (
+                    "🤔 Не понял запрос. Напишите, какую технику ищете — или нажмите 💡 Примеры."
+                    if client else
+                    "❌ Не удалось разобрать сообщение.\n"
+                    "Попробуйте оформить позиции нумерованным списком."
                 )
-                try:
-                    pdf_path = await asyncio.to_thread(
-                        build_offer_pdf, selection, get_settings()
+                await status.edit_text(err)
+                return
+            except Exception:  # noqa: BLE001
+                err = (
+                    "⚙️ Сервис временно недоступен. Попробуйте, пожалуйста, чуть позже."
+                    if client else
+                    "❌ Сервис разбора недоступен (Groq / сеть).\n"
+                    "Проверьте GROQ_API_KEY в .env."
+                )
+                await status.edit_text(err)
+                return
+
+            if client:
+                await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
+                await status.edit_text(client_status_select(), parse_mode=ParseMode.HTML)
+
+            try:
+                queue_t0 = time.perf_counter()
+                async with _EKROM_LOCK:
+                    queue_wait = time.perf_counter() - queue_t0
+                    selection = await pipeline.select_products(
+                        request, enrich_chosen=client
                     )
-                    await message.answer_document(
-                        FSInputFile(pdf_path), caption=pdf_caption()
+            except Exception:  # noqa: BLE001
+                logger.exception("select_products failed")
+                err = (
+                    "😔 Не удалось подобрать сейчас. Попробуйте через минуту или напишите менеджеру."
+                    if client else
+                    "❌ Ошибка при подборе на ekrom. Попробуйте позже."
+                )
+                await status.edit_text(err)
+                return
+
+            success = True
+            matched_count = len(selection.matched)
+
+            preview = (
+                format_client_selection(selection, get_settings().shop_name)
+                if client else format_selection(selection)
+            )
+            if len(preview) > 4000:
+                preview = preview[:3990] + "…"
+
+            if client:
+                if selection.matched:
+                    await status.edit_text(preview, parse_mode=ParseMode.HTML)
+                    await message.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
+                    pdf_status = await message.answer(
+                        client_status_pdf(), parse_mode=ParseMode.HTML
                     )
-                    await pdf_status.delete()
-                except Exception:  # noqa: BLE001
-                    logger.exception("client offer pdf failed")
-                    await pdf_status.edit_text(
-                        "Подбор выше 👆 PDF не удалось собрать — менеджер пришлёт отдельно."
+                    try:
+                        pdf_path = await asyncio.to_thread(
+                            build_offer_pdf, selection, get_settings()
+                        )
+                        await message.answer_document(
+                            FSInputFile(pdf_path), caption=pdf_caption()
+                        )
+                        await pdf_status.delete()
+                        if uid is not None:
+                            _history().add(
+                                uid,
+                                text,
+                                pdf_path,
+                                total_price=selection.total_price,
+                                matched_count=matched_count,
+                            )
+                    except Exception:  # noqa: BLE001
+                        logger.exception("client offer pdf failed")
+                        await pdf_status.edit_text(
+                            "Подбор выше 👆 PDF не удалось собрать — менеджер пришлёт отдельно."
+                        )
+                    s = get_settings()
+                    await message.answer(
+                        followup_text(s),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=followup_keyboard(s),
+                        disable_web_page_preview=True,
                     )
-                s = get_settings()
-                await message.answer(
-                    followup_text(s),
+                else:
+                    await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
+                await _notify_lead(message, selection)
+                return
+
+            token = uuid.uuid4().hex
+            _STORE[token] = _Pending(selection=selection)
+
+            if selection.matched:
+                await status.edit_text(
+                    preview,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=followup_keyboard(s),
-                    disable_web_page_preview=True,
+                    reply_markup=_pdf_keyboard(token),
                 )
             else:
-                await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
-            await _notify_lead(message, selection)
-            return
-
-        token = uuid.uuid4().hex
-        _STORE[token] = _Pending(selection=selection)
-
-        if selection.matched:
-            await status.edit_text(
-                preview,
-                parse_mode=ParseMode.HTML,
-                reply_markup=_pdf_keyboard(token),
+                await status.edit_text(preview, parse_mode=ParseMode.HTML)
+        finally:
+            _record_pick_metric(
+                uid,
+                client=client,
+                success=success,
+                matched_count=matched_count,
+                duration_sec=time.perf_counter() - t0,
+                queue_wait_sec=queue_wait,
             )
-        else:
-            await status.edit_text(preview, parse_mode=ParseMode.HTML)
 
 
 async def callback_pdf(callback: CallbackQuery) -> None:
@@ -727,6 +842,39 @@ async def callback_example(callback: CallbackQuery) -> None:
     await _run_pick(callback.message, query, op=op, client=client)
 
 
+async def callback_history(callback: CallbackQuery) -> None:
+    """Повторная отправка PDF из истории клиента."""
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    uid = callback.from_user.id if callback.from_user else None
+    if uid is None or not get_settings().client_mode or _is_operator(uid):
+        await callback.answer("Недоступно", show_alert=True)
+        return
+
+    if callback.data == "hist:menu":
+        await callback.answer()
+        await _show_client_history(callback.message)
+        return
+
+    try:
+        record_id = int(callback.data.removeprefix("hist:"))
+    except ValueError:
+        await callback.answer()
+        return
+
+    rec = _history().get(record_id, uid)
+    if rec is None or not rec.pdf_path.is_file():
+        await callback.answer("Подбор не найден или PDF удалён", show_alert=True)
+        return
+
+    await callback.answer("Отправляю PDF…")
+    await callback.message.answer_document(
+        FSInputFile(rec.pdf_path),
+        caption=f"📄 {rec.query_text[:120]}",
+    )
+
+
 async def callback_manage(callback: CallbackQuery) -> None:
     """Админские действия по инлайн-кнопкам: добавить/удалить/отклонить менеджера."""
     if not _is_admin(callback.from_user.id if callback.from_user else None):
@@ -823,11 +971,14 @@ def _build_dispatcher() -> Dispatcher:
     dp.message.register(cmd_start, Command("start"))
     dp.message.register(cmd_examples, Command("examples"))
     dp.message.register(cmd_contacts, Command("contacts"))
+    dp.message.register(cmd_history, Command("history"))
+    dp.message.register(cmd_stats, Command("stats"))
     dp.message.register(cmd_status, Command("status"))
     dp.message.register(cmd_login, Command("login"))
     dp.message.register(handle_text, F.text & ~F.text.startswith("/"))
     dp.callback_query.register(callback_pdf, F.data.startswith("pdf:"))
     dp.callback_query.register(callback_example, F.data.startswith("ex:"))
+    dp.callback_query.register(callback_history, F.data.startswith("hist:"))
     dp.callback_query.register(
         callback_manage,
         lambda q: bool(q.data) and q.data.split(":", 1)[0] in {"addmgr", "delmgr", "denymgr"},
@@ -856,6 +1007,7 @@ async def main() -> None:
         if settings.client_mode:
             commands = [
                 BotCommand(command="start", description="🏠 Начать"),
+                BotCommand(command="history", description="📂 Мои подборы"),
                 BotCommand(command="examples", description="💡 Примеры запросов"),
                 BotCommand(command="contacts", description="📞 Контакты магазина"),
             ]
@@ -864,6 +1016,10 @@ async def main() -> None:
                 BotCommand(command="start", description="ℹ️ Как пользоваться"),
                 BotCommand(command="status", description="🔁 Проверить вход в ekrom"),
                 BotCommand(command="login", description="🔐 Обновить вход в ekrom"),
+            ]
+        if settings.admin_user_ids:
+            commands = list(commands) + [
+                BotCommand(command="stats", description="📊 Статистика (админ)"),
             ]
         await bot.set_my_commands(commands)
     except Exception:  # noqa: BLE001 — меню команд не критично

@@ -125,6 +125,14 @@ class Settings(BaseSettings):
         p = Path(self.output_dir)
         return p if p.is_absolute() else REPO_ROOT / p
 
+    @property
+    def analytics_db_path(self) -> Path:
+        return REPO_ROOT / "data" / "bot_analytics.db"
+
+    @property
+    def pick_history_dir(self) -> Path:
+        return REPO_ROOT / "data" / "history"
+
 
 @lru_cache
 def get_settings() -> Settings:
