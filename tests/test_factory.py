@@ -51,3 +51,10 @@ def test_unknown_provider_raises():
 def test_gigachat_not_implemented():
     with pytest.raises(NotImplementedError):
         get_llm_provider(Settings(LLM_PROVIDER="gigachat"))
+
+
+def test_model_override_applies():
+    # Override модели (для резолвера) должен победить дефолт провайдера.
+    s = Settings(LLM_PROVIDER="yandex", YANDEX_API_KEY="k", YANDEX_FOLDER_ID="b1")
+    p = get_llm_provider(s, model="yandexgpt")
+    assert p._model_uri.endswith("/yandexgpt/latest")

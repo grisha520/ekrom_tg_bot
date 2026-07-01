@@ -90,7 +90,10 @@ class CategoryResolver:
         if self._llm is None:
             from ..llm import get_llm_provider
 
-            self._llm = get_llm_provider(self._settings)
+            # Резолвер может использовать более сильную модель (LLM_RESOLVER_MODEL).
+            self._llm = get_llm_provider(
+                self._settings, model=self._settings.resolver_model or None
+            )
         return self._llm
 
     def resolve(self, specs: list[ProductSpec]) -> None:

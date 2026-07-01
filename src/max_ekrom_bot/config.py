@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     )
     yandex_api_key: str = Field(default="", alias="YANDEX_API_KEY")
     yandex_folder_id: str = Field(default="", alias="YANDEX_FOLDER_ID")
+    # Модель для резолвера категорий (может быть сильнее основной — выбор из ~57
+    # категорий требователен). Пусто — использовать основную LLM_MODEL. Для
+    # YandexGPT рекомендуется yandexgpt (Pro): Lite грубо ошибается в категориях.
+    resolver_model: str = Field(default="", alias="LLM_RESOLVER_MODEL")
     gigachat_auth_key: str = Field(default="", alias="GIGACHAT_AUTH_KEY")
     # LLM-ре-ранк шортлиста подбора (#6): выбор лучшего товара моделью. По
     # умолчанию выкл — работает детерминированный подбор. Включение добавляет

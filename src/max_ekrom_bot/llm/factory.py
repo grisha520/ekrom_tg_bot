@@ -13,36 +13,42 @@ from .openai_provider import OpenAIProvider
 from .yandex_provider import YandexGPTProvider
 
 
-def get_llm_provider(settings: Settings | None = None) -> LLMProvider:
+def get_llm_provider(
+    settings: Settings | None = None, model: str | None = None
+) -> LLMProvider:
+    """Провайдер по конфигу. `model` переопределяет LLM_MODEL (напр. более сильная
+    модель для резолвера категорий), оставаясь в рамках выбранного провайдера."""
     settings = settings or get_settings()
     provider = settings.llm_provider.lower()
 
     if provider == "openai":
-        return OpenAIProvider(api_key=settings.openai_api_key, model=settings.llm_model)
+        return OpenAIProvider(
+            api_key=settings.openai_api_key, model=model or settings.llm_model
+        )
 
     if provider == "groq":
         # LLM_MODEL по умолчанию рассчитан на OpenAI (gpt-*); для Groq берём
         # его только если это не OpenAI-модель, иначе — дефолтную модель Groq.
-        model = settings.llm_model
-        if not model or model.lower().startswith("gpt-"):
-            model = DEFAULT_GROQ_MODEL
+        m = model or settings.llm_model
+        if not m or m.lower().startswith("gpt-"):
+            m = DEFAULT_GROQ_MODEL
         return GroqProvider(
             api_key=settings.groq_api_key,
-            model=model,
+            model=m,
             base_url=settings.groq_base_url,
         )
 
     if provider == "yandex":
-        # Используем LLM_MODEL, только если это yandex-модель (yandexgpt-lite/
+        # Используем модель, только если это yandex-модель (yandexgpt-lite/
         # yandexgpt/…). Иначе (там может остаться gpt-*/openai-модель от другого
         # провайдера) — берём lite по умолчанию.
-        model = settings.llm_model
-        if not model or not model.lower().startswith("yandexgpt"):
-            model = "yandexgpt-lite"
+        m = model or settings.llm_model
+        if not m or not m.lower().startswith("yandexgpt"):
+            m = "yandexgpt-lite"
         return YandexGPTProvider(
             api_key=settings.yandex_api_key,
             folder_id=settings.yandex_folder_id,
-            model=model,
+            model=m,
         )
 
     if provider == "gigachat":
