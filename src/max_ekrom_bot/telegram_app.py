@@ -145,6 +145,21 @@ def _is_operator(user_id: int | None) -> bool:
 _user_allowed = _is_operator
 
 
+# Операторы, включившие «клиентский предпросмотр» (/preview): бот показывает им
+# клиентский путь (онбординг, авто-PDF, история), не отнимая реальных прав.
+# In-memory: сбрасывается при рестарте — для теста этого достаточно.
+_PREVIEW: set[int] = set()
+
+
+def _acts_as_operator(user_id: int | None) -> bool:
+    """Роль для UX-решений: оператор в /preview выглядит клиентом.
+
+    Права (доступ к /status, /login, менеджерам, /stats) проверяются отдельно
+    через _is_operator/_is_admin и предпросмотром не отнимаются.
+    """
+    return _is_operator(user_id) and user_id not in _PREVIEW
+
+
 def _can_use(user_id: int | None) -> bool:
     """Может ли пользователь делать подбор. В клиентском режиме — все; иначе —
     только операторы (прежнее поведение «бот для менеджеров»)."""
@@ -356,6 +371,7 @@ def _help_text(is_admin: bool = False) -> str:
         f"{BTN_STATUS} — проверить сессию ekrom\n"
         f"{BTN_LOGIN} — обновить вход в ekrom\n"
         f"{BTN_HELP} — эта справка\n"
+        "/preview — посмотреть бота глазами клиента (повторно — выйти)\n"
     )
     if is_admin:
         text += (
@@ -411,9 +427,29 @@ def _pdf_keyboard(token: str) -> InlineKeyboardMarkup:
     )
 
 
+async def cmd_preview(message: Message) -> None:
+    """Переключить оператору «клиентский предпросмотр» (виден клиентский путь)."""
+    uid = message.from_user.id if message.from_user else None
+    if not _is_operator(uid):
+        return  # клиентам команда не нужна — молча игнорируем
+    if uid in _PREVIEW:
+        _PREVIEW.discard(uid)
+        await message.answer("✅ Предпросмотр выключен — вы снова оператор.")
+    else:
+        if not get_settings().client_mode:
+            await message.answer("CLIENT_MODE выключен — клиентского пути нет.")
+            return
+        _PREVIEW.add(uid)
+        await message.answer(
+            "👀 Предпросмотр включён: бот отвечает вам как клиенту.\n"
+            "Выключить — повторно /preview."
+        )
+    await cmd_start(message)
+
+
 async def cmd_start(message: Message) -> None:
     uid = message.from_user.id if message.from_user else None
-    if _is_operator(uid):
+    if _acts_as_operator(uid):
         admin = _is_admin(uid)
         await message.answer(
             _help_text(admin), parse_mode=ParseMode.HTML,
@@ -437,7 +473,7 @@ async def cmd_start(message: Message) -> None:
 
 
 async def cmd_examples(message: Message) -> None:
-    if not get_settings().client_mode or _is_operator(message.from_user.id if message.from_user else None):
+    if not get_settings().client_mode or _acts_as_operator(message.from_user.id if message.from_user else None):
         await cmd_start(message)
         return
     await message.answer(
@@ -448,7 +484,7 @@ async def cmd_examples(message: Message) -> None:
 
 
 async def cmd_contacts(message: Message) -> None:
-    if not get_settings().client_mode or _is_operator(message.from_user.id if message.from_user else None):
+    if not get_settings().client_mode or _acts_as_operator(message.from_user.id if message.from_user else None):
         await cmd_start(message)
         return
     s = get_settings()
@@ -473,7 +509,7 @@ async def _show_client_history(message: Message) -> None:
 
 
 async def cmd_history(message: Message) -> None:
-    if not get_settings().client_mode or _is_operator(message.from_user.id if message.from_user else None):
+    if not get_settings().client_mode or _acts_as_operator(message.from_user.id if message.from_user else None):
         await cmd_start(message)
         return
     await _show_client_history(message)
@@ -551,7 +587,7 @@ async def handle_text(message: Message) -> None:
         return
 
     text = message.text.strip()
-    op = _is_operator(uid)
+    op = _acts_as_operator(uid)
     client = get_settings().client_mode and not op
 
     if text == BTN_HELP:
@@ -591,18 +627,25 @@ async def handle_text(message: Message) -> None:
         )
         return
 
-    if client and uid is not None:
+    # Лимит — только для настоящих клиентов: оператор в /preview тестирует и не
+    # должен блокировать сам себя.
+    if client and uid is not None and not _is_operator(uid):
         rl = _ratelimiter()
         if not rl.allowed(uid):
             await message.answer(_rate_limit_text())
             return
         rl.hit(uid)
 
-    await _run_pick(message, text, op=op, client=client)
+    await _run_pick(message, text, op=op, client=client, real_op=_is_operator(uid))
 
 
-async def _run_pick(message: Message, text: str, *, op: bool, client: bool) -> None:
-    """Разбор запроса → подбор → PDF (клиент) или превью+кнопка (оператор)."""
+async def _run_pick(
+    message: Message, text: str, *, op: bool, client: bool, real_op: bool = False
+) -> None:
+    """Разбор запроса → подбор → PDF (клиент) или превью+кнопка (оператор).
+
+    real_op — настоящая роль (не «предпросмотрная»): по ней решаем, слать ли лид.
+    """
     uid = message.from_user.id if message.from_user else None
     t0 = time.perf_counter()
     queue_wait = 0.0
@@ -714,7 +757,9 @@ async def _run_pick(message: Message, text: str, *, op: bool, client: bool) -> N
                     )
                 else:
                     await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
-                await _notify_lead(message, selection)
+                # Оператор в /preview тестирует сам — лид о нём не шлём (шум).
+                if not real_op:
+                    await _notify_lead(message, selection)
                 return
 
             token = uuid.uuid4().hex
@@ -810,7 +855,7 @@ async def callback_example(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     uid = callback.from_user.id if callback.from_user else None
-    if not get_settings().client_mode or _is_operator(uid):
+    if not get_settings().client_mode or _acts_as_operator(uid):
         await callback.answer()
         return
 
@@ -831,15 +876,17 @@ async def callback_example(callback: CallbackQuery) -> None:
         return
 
     await callback.answer("Подбираю…")
-    op = _is_operator(uid)
+    op = _acts_as_operator(uid)
     client = get_settings().client_mode and not op
-    if client and uid is not None:
+    if client and uid is not None and not _is_operator(uid):
         rl = _ratelimiter()
         if not rl.allowed(uid):
             await callback.message.answer(_rate_limit_text())
             return
         rl.hit(uid)
-    await _run_pick(callback.message, query, op=op, client=client)
+    await _run_pick(
+        callback.message, query, op=op, client=client, real_op=_is_operator(uid)
+    )
 
 
 async def callback_history(callback: CallbackQuery) -> None:
@@ -848,7 +895,7 @@ async def callback_history(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     uid = callback.from_user.id if callback.from_user else None
-    if uid is None or not get_settings().client_mode or _is_operator(uid):
+    if uid is None or not get_settings().client_mode or _acts_as_operator(uid):
         await callback.answer("Недоступно", show_alert=True)
         return
 
@@ -975,6 +1022,7 @@ def _build_dispatcher() -> Dispatcher:
     dp.message.register(cmd_stats, Command("stats"))
     dp.message.register(cmd_status, Command("status"))
     dp.message.register(cmd_login, Command("login"))
+    dp.message.register(cmd_preview, Command("preview"))
     dp.message.register(handle_text, F.text & ~F.text.startswith("/"))
     dp.callback_query.register(callback_pdf, F.data.startswith("pdf:"))
     dp.callback_query.register(callback_example, F.data.startswith("ex:"))
