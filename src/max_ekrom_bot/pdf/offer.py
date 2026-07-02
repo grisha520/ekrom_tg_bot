@@ -18,6 +18,7 @@ from __future__ import annotations
 import html
 import io
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -159,6 +160,10 @@ def _attrs_line(attrs: dict[str, str]) -> str:
         if kl in _HIDE_ATTRS or any(s in kl for s in _SKIP_ATTR_SUBSTR):
             continue
         clean = (val or "").replace("\n", ", ").strip().strip(",")
+        # Значения-списки у ekrom уже содержат запятые перед переводом строки —
+        # после замены получаются «,,». Сжимаем повторы и лишние пробелы.
+        clean = re.sub(r",\s*,+", ",", clean)
+        clean = re.sub(r"\s{2,}", " ", clean)
         if clean:
             visible.append((key, clean))
     # Стабильная сортировка по приоритету (внутри ранга — исходный порядок).
@@ -336,7 +341,8 @@ def build_offer_pdf(
                 Paragraph("Итого", st["total_label"]),
                 Paragraph(_fmt_price(selection.total_price), st["total"]),
             ]],
-            colWidths=[140 * mm, 34 * mm],
+            # Правая колонка с запасом, чтобы сумма с «₽» не переносилась.
+            colWidths=[120 * mm, 54 * mm],
         )
         total.setStyle(
             TableStyle(
