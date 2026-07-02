@@ -69,6 +69,25 @@ def test_build_offer_pdf_creates_readable_file(tmp_path):
     assert "Lex HUBBLE 600" in text
 
 
+def _pdf_link_uris(path) -> set[str]:
+    uris: set[str] = set()
+    for page in PdfReader(str(path)).pages:
+        for annot in page.get("/Annots") or []:
+            obj = annot.get_object()
+            action = obj.get("/A")
+            if action and action.get("/URI"):
+                uris.add(str(action["/URI"]))
+    return uris
+
+
+def test_pdf_contains_clickable_product_links(tmp_path):
+    out = tmp_path / "offer.pdf"
+    build_offer_pdf(_selection(), Settings(LLM_PROVIDER="rule"), out)
+    uris = _pdf_link_uris(out)
+    assert "https://www.ekrom.ru/products/lex_edm_4575/" in uris
+    assert "https://www.ekrom.ru/products/lex_hubble_600/" in uris
+
+
 def test_attrs_line_prioritizes_useful_and_skips_embed_dims():
     attrs = {
         "Ширина встраивания, мм": "560",

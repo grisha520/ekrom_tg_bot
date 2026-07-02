@@ -22,6 +22,9 @@ def format_selection(selection: SelectionResult) -> str:
     for i, item in enumerate(selection.matched, 1):
         p = item.product
         title = html.escape(p.title)
+        # Название — кликабельная ссылка на карточку товара (если url есть).
+        if p.url:
+            title = f'<a href="{html.escape(p.url, quote=True)}">{title}</a>'
         price = _fmt_price(p.price)
         is_sub = "Предложена замена" in item.reason
         mark = " ⚠️ <i>замена</i>" if is_sub else ""

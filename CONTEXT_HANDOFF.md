@@ -1,115 +1,83 @@
-# max-ekrom-bot — контекст проекта (handoff для новой сессии Claude)
+# max-ekrom-bot — контекст проекта (handoff для нового чата)
 
-> Вставь этот файл в начало новой сессии, чтобы ассистент понимал, о чём речь.
-> Файл — для разработчика; секретов (токены/пароли/ключи) тут нет, они в `.env`.
+> Вставь этот файл **или** `docs/HANDOFF_ДИАЛОГ_2026-07-01.md` первым сообщением в новом чате.
+> Секретов (токены/пароли/ключи) тут нет — они в `.env` на сервере.
 
-## Что это за проект
-Телеграм-бот для менеджеров магазина бытовой техники **ekrom.ru**. Менеджер
-присылает боту свободное сообщение клиента со списком техники — бот разбирает его,
-подбирает товары на сайте ekrom, показывает превью с ценами и по кнопке формирует
-PDF (добавляет в корзину на сайте). Язык проекта и общения — русский.
+## Что это
+Телеграм-бот подбора бытовой техники магазина **ekrom.ru**. **Клиент пишет боту
+сам**, бот разбирает запрос, подбирает товары по всему каталогу ekrom и присылает
+**PDF-подбор** (свой шаблон с ценами, фото, характеристиками). Язык — русский.
+Бот: **@ekroom_bot**. Возможна интеграция в мессенджер МАКС.
 
 ## Стек и архитектура
-- **Python 3.12** (сервер) / 3.13 (локально), src-layout, пакет `max_ekrom_bot`
-  (ставится `pip install -e .`).
-- **aiogram 3.20** — Telegram-бот (long polling).
-- **Playwright (headless Chromium)** — автоматизация сайта ekrom (Bitrix).
-- **Groq LLM** (OpenAI-совместимый API) — разбор сообщений клиента в структуру.
-- **pydantic-settings** — конфиг из `.env`.
-- Ядро messenger-agnostic: `pipeline.py` (parse → resolve категории → сбор
-  кандидатов → клиентский скоринг → корзина → PDF).
+- **Python 3.12** (сервер) / 3.13 (локально), пакет `max_ekrom_bot`.
+- **aiogram 3.20** — Telegram (long polling).
+- **Playwright** — ekrom (обогащение, операторская корзина).
+- **YandexGPT** Lite (парсер) + Pro (резолвер категорий).
+- **reportlab** — клиентский PDF. **SQLite** — кэш каталога + история + метрики.
+- Ядро: `pipeline.py` → parse → резолвер → кэш → селектор → enrich → PDF.
 
 ### Ключевые файлы
-- `src/max_ekrom_bot/telegram_app.py` — бот, кнопки, доступ, управление менеджерами.
-- `src/max_ekrom_bot/pipeline.py` — оркестрация подбора (тиры замен, ре-ранк).
-- `src/max_ekrom_bot/matching/selector.py` — детерминированный подбор: фильтры
-  (цвет/топливо/исключения/бюджет/установка) + взвешенный скоринг.
-- `src/max_ekrom_bot/parsing/parser.py` — системный промпт LLM-разбора.
-- `src/max_ekrom_bot/parsing/category_resolver.py` — LLM-маппинг в категорию из
-  `data/categories.json` (расширение за пределы 6 встроенных типов кухни).
-- `src/max_ekrom_bot/models.py` — доменные модели (`ProductSpec`, `CatalogProduct`…).
-- `src/max_ekrom_bot/llm/groq_provider.py` — провайдер Groq.
-- `src/max_ekrom_bot/managers.py` — `ManagerStore` (allowlist в `data/managers.json`).
-- `src/max_ekrom_bot/messenger/telegram_format.py` — текст превью подбора.
-- `deploy/update.sh` / `deploy/setup.sh` — деплой на сервер.
+- `telegram_app.py` — бот, роли, лиды, история, stats.
+- `messenger/client_ux.py` — тексты/кнопки клиента.
+- `pick_history.py` — «📂 Мои подборы» (PDF на диске).
+- `bot_metrics.py` — `/stats` для админа.
+- `pipeline.py`, `matching/selector.py`, `parsing/category_resolver.py`.
+- `pdf/offer.py`, `ekrom/catalog_cache.py`, `scripts/crawl_catalog.py`.
+- `scripts/client_e2e_suite.py` — e2e-прогон 12 кейсов.
 
 ## Деплой / сервер
-- **VPS:** 77.221.152.85 (Франция, 2 vCPU / 4 ГБ + 2 ГБ swap).
-- **systemd-сервис:** `max-ekrom-bot`, каталог `/opt/max-ekrom-bot`, git-clone
-  через SSH deploy key (репозиторий приватный).
-- **Подключение с Windows:** Bitvise CLI — `sexec.exe` (команды) / `sftpc.exe`
-  (файлы). Составные команды через `-cmd=...`; host key pin
-  `-hostKeyFp=WfRy4N4Qbbla+ql9cPCVbRhkzv5tEhf6im9XOVdRiSE`. Код выхода 232 = норма.
-- **Обновить прод:** `git push` → на сервере `cd /opt/max-ekrom-bot && git pull
-  --ff-only && systemctl restart max-ekrom-bot` (или `bash deploy/update.sh`).
-- ⚠️ Безопасность: root-пароль сервера светился в чате — стоит сменить /
-  перейти на ключи (висит как рекомендация, не сделано).
+- **VPS:** 77.221.152.85 (PARs-2: 2 vCPU, 4 ГБ, 60 ГБ NVMe, Ubuntu 24.04).
+- **systemd:** `max-ekrom-bot`, каталог `/opt/max-ekrom-bot`.
+- **Bitvise sexec:** `-hostKeyFp=WfRy4N4Qbbla+ql9cPCVbRhkzv5tEhf6im9XOVdRiSE`
+- **Деплой:** `git push` → `git pull --ff-only && bash deploy/update.sh`
+- **Cron 04:00:** `scripts/crawl_catalog.py`
+- ⚠️ Сменить root-пароль, настроить SSH-ключ / профиль Bitvise (пароль светился в чате).
 
-## GitHub / синхронизация
-- Репозиторий (приватный): https://github.com/grisha520/ekrom_tg_bot — это
-  единственный источник правды для кода. Работа с двух устройств = clone + pull/push.
-- **Не в git** (`.gitignore`, переносить вручную между устройствами):
-  `.env` (секреты), `data/storage_state.json` (сессия ekrom),
-  `data/managers.json` (список менеджеров, иначе пересоздаётся из `TELEGRAM_ALLOWED_IDS`).
+## GitHub
+- https://github.com/grisha520/ekrom_tg_bot — **последний коммит `79c9757`**
+- Не в git: `.env`, `storage_state.json`, `managers.json`, `catalog.db*`,
+  `bot_analytics.db`, `data/history/`
 
-## Конфиг (.env, без значений)
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_IDS` (стартовые менеджеры),
-  `TELEGRAM_ADMIN_IDS` (кто рулит менеджерами из бота; сейчас `7413559198` = @omark64).
-- `LLM_PROVIDER=groq`, `LLM_MODEL=openai/gpt-oss-120b`, `GROQ_API_KEY`.
-- `EKROM_LOGIN`/`EKROM_PASSWORD`, `EKROM_STORAGE_STATE`.
-- `LLM_RERANK=false` (детерминированный подбор; включение = +1 LLM-вызов на позицию).
+## .env на проде (имена)
+`TELEGRAM_*`, `YANDEX_*`, `LLM_PROVIDER=yandex`, `LLM_MODEL=yandexgpt-lite`,
+`LLM_RESOLVER_MODEL=yandexgpt`, `CLIENT_MODE=true`, `CLIENT_RATE_PER_HOUR=8`,
+`CLIENT_RATE_PER_DAY=30`, `NOTIFY_LEAD=true`, `USE_CATALOG_CACHE=true`,
+`SHOP_NAME/CONTACTS/SITE`, `EKROM_LOGIN/PASSWORD`.
 
-## Лимиты Groq (free tier, модель openai/gpt-oss-120b)
-- RPD 1000 запросов/сутки, TPM 8000 токенов/мин, TPD ~200 000 токенов/сутки.
-- Одно сообщение клиента ≈ 1 LLM-вызов, ~1100–1500 токенов.
-- Практический потолок ≈ **130–180 сообщений/сутки** (упираемся в токены, не в запросы).
+## Клиентский режим
+- Подбор и PDF — всем; операторские кнопки — только allowlist/admin.
+- **Тест клиента** — с аккаунта НЕ из `TELEGRAM_ALLOWED_IDS` (@omark64 = оператор).
+- Кнопки: 💡 Примеры, 📂 Мои подборы, 📞 Контакты, ℹ️ Справка.
+- Команды: `/start`, `/history`, `/examples`, `/contacts`.
+- После подбора: авто-PDF + лид на `TELEGRAM_ADMIN_IDS` (7413559198).
 
-## Текущие функции бота
-- Кнопочный интерфейс (ReplyKeyboard): «🔁 Проверить вход», «🔐 Обновить вход»,
-  «ℹ️ Как пользоваться», у админа ещё «👥 Менеджеры».
-- **Управление менеджерами из бота без рестарта:** новый юзер пишет боту → админу
-  приходит «✅ Добавить»; удаление — список «👥 Менеджеры» → «➖ Удалить»; можно
-  добавить по числовому id. Хранится в `data/managers.json`.
-- Подбор: 6 встроенных типов кухни (smart-filter Bitrix) + любые категории через
-  LLM-резолвер; точная модель/бренд → каскад замен; превью с ценами; PDF.
+## История и метрики (новое)
+- **История:** 20 PDF / 30 дней, `data/history/{user_id}/`, БД `data/bot_analytics.db`.
+- **Админ `/stats`:** запросы/день, очередь, время подбора, ошибки (МСК).
 
-## Что недавно сделано (последние сессии)
-1. **Сменили модель LLM** на `openai/gpt-oss-120b` (была llama-3.3-70b).
-2. **Фикс зависания бота:** статус-сообщение слали с ReplyKeyboard, потом
-   `edit_text` с inline-кнопкой → Telegram «message can't be edited» → «⏳» висел.
-   Убрали reply-клавиатуру с редактируемого статус-сообщения. (коммит b91b157)
-3. **Доработки подбора** (коммит 98c1e39):
-   - парсер извлекает **исключения** `exclude_colors`/`exclude_fuel` («не белую»,
-     «кроме газовых») и **бюджет** `max_price` («до 30000», «25 тыс»);
-   - селектор: жёсткий фильтр по исключённому топливу; ценовой потолок с мягким
-     фолбэком (если в бюджет никто не влез — ранжируем всех, а не «не найдено»);
-   - **экономная замена бренда:** если запрошенного бренда/модели нет, аналог
-     берётся от самого дешёвого (раньше «средний» улетал в премиум: Indesit →
-     встраиваемый за 96к, стало 10к);
-   - `max_retries=5` у Groq-клиента — ретраи 429 (лимит TPM) с учётом Retry-After.
-4. **Прогнали 50 тест-сообщений** (макс. охват) через прод-пайплайн дважды:
-   **50/50 подобрано, без ошибок**, регрессий нет. Подтверждены: склонения
-   цветов, морозилка≠холодильник, плита≠варочная, утюг-парогенератор≠паровой шкаф,
-   новые категории, комплекты до 5 позиций.
+## Кэш и производительность
+- ~7900 товаров, many-to-many, WAL. Тёплый путь ~0.6 с; enrich ~9–11 с.
+- **Узкое место:** `_EKROM_LOCK` — один подбор за раз. VPS хватает на ~30–80 клиентов/день комфортно.
 
-## Состояние на сейчас
-- Всё закоммичено и задеплоено, сервис активен, **102 теста** зелёные.
-- Ветка `main`, последний коммит `98c1e39`.
+## Что сделано (включая сессию 2026-07-01)
+- Резолвер Pro + только родительские категории.
+- Клиентский UX v2 (онбординг, примеры, пошаговый статус).
+- История PDF «Мои подборы» + метрики `/stats` для админа.
+- E2E-скрипт, 138 тестов pytest.
 
-## Мелочи / возможные следующие шаги
-- Косметика: в тексте обоснования замены написано «Выбран «средний» вариант», хотя
-  для замены берётся самый дешёвый — можно поменять формулировку на «бюджетная замена».
-- `#38` «кухонная плита газовая» → Smeg 183 790 ₽ — не баг: газовых плит на ekrom
-  мало и они дорогие, «средний» по факту такой.
-- `#37` «кофемашина автоматическая» → «кофеварка» — резолвер чуть смешивает категории.
-- Рекомендация по безопасности: сменить root-пароль сервера / перейти на SSH-ключи.
+## Не сделано (приоритет)
+1. Селектор: кофемашина/морозилка по замечаниям e2e.
+2. `/preview` для оператора.
+3. Три варианта на позицию (бюджет/оптимум/премиум).
+4. Уточнения «дешевле/другой цвет», лиды v2, алерты stats.
+5. Параллельная очередь Playwright, МАКС (`max_app.py`).
 
-## Полезные команды
+Подробный план улучшений — `docs/HANDOFF_ДИАЛОГ_2026-07-01.md`.
+
+## Команды
 ```bash
-# тесты
-.venv/Scripts/python.exe -m pytest -q          # Windows
-# деплой на сервер (после git push) — через Bitvise sexec -cmd=
-#   cd /opt/max-ekrom-bot && git pull --ff-only && systemctl restart max-ekrom-bot
-# вход ekrom (обновить storage_state.json)
-python scripts/login_ekrom.py
+.venv/Scripts/python.exe -m pytest -q          # Windows, 138 тестов
+./.venv/bin/python scripts/client_e2e_suite.py # e2e
+# сервер: git pull --ff-only && bash deploy/update.sh
 ```

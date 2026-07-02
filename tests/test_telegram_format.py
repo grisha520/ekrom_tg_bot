@@ -30,6 +30,16 @@ def test_matched_and_total_rendered():
     assert "1 000 ₽" in out
 
 
+def test_title_is_clickable_link():
+    p = CatalogProduct(
+        title="Духовка X",
+        url="https://www.ekrom.ru/products/dukhovka_x/?a=1&b=2",
+        price=1000,
+    )
+    out = format_selection(SelectionResult(items=[MatchedItem(spec=ProductSpec(), product=p)]))
+    assert '<a href="https://www.ekrom.ru/products/dukhovka_x/?a=1&amp;b=2">Духовка X</a>' in out
+
+
 def test_substitution_marked():
     p = CatalogProduct(title="Замена", url="u", price=500)
     item = MatchedItem(spec=ProductSpec(), product=p, reason="Предложена замена. ...")

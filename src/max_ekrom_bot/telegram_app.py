@@ -722,7 +722,10 @@ async def _run_pick(
 
             if client:
                 if selection.matched:
-                    await status.edit_text(preview, parse_mode=ParseMode.HTML)
+                    await status.edit_text(
+                        preview, parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
                     await message.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
                     pdf_status = await message.answer(
                         client_status_pdf(), parse_mode=ParseMode.HTML
@@ -770,9 +773,12 @@ async def _run_pick(
                     preview,
                     parse_mode=ParseMode.HTML,
                     reply_markup=_pdf_keyboard(token),
+                    disable_web_page_preview=True,
                 )
             else:
-                await status.edit_text(preview, parse_mode=ParseMode.HTML)
+                await status.edit_text(
+                    preview, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+                )
         finally:
             _record_pick_metric(
                 uid,

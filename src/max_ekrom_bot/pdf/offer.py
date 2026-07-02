@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import html
 import io
 import os
 from datetime import datetime
@@ -165,15 +166,27 @@ def _attrs_line(attrs: dict[str, str]) -> str:
     return "  ·  ".join(f"{k}: {v}" for k, v in visible[:_MAX_ATTRS])  # ·
 
 
+# Палитра оформления: сдержанный тёмно-синий акцент + светлая «зебра» строк.
+_ACCENT = colors.HexColor("#23527c")
+_ACCENT_SOFT = colors.HexColor("#eef3f8")
+_ZEBRA = colors.HexColor("#f7f9fc")
+_LINK = colors.HexColor("#2b6cb0")
+
+
 def _styles() -> dict[str, ParagraphStyle]:
     base = ParagraphStyle("base", fontName=_FONT, fontSize=10, leading=13)
     return {
         "base": base,
         "title": ParagraphStyle(
-            "title", parent=base, fontName=_FONT_BOLD, fontSize=18, leading=22
+            "title", parent=base, fontName=_FONT_BOLD, fontSize=20, leading=24,
+            textColor=_ACCENT,
         ),
         "sub": ParagraphStyle(
             "sub", parent=base, fontSize=9, textColor=colors.HexColor("#666666")
+        ),
+        "date": ParagraphStyle(
+            "date", parent=base, fontSize=9, alignment=TA_RIGHT,
+            textColor=colors.HexColor("#666666"),
         ),
         "item": ParagraphStyle(
             "item", parent=base, fontName=_FONT_BOLD, fontSize=11, leading=14
@@ -182,13 +195,19 @@ def _styles() -> dict[str, ParagraphStyle]:
             "attrs", parent=base, fontSize=8.5, leading=11,
             textColor=colors.HexColor("#555555"),
         ),
+        "link": ParagraphStyle(
+            "link", parent=base, fontSize=8.5, leading=11, textColor=_LINK,
+        ),
         "price": ParagraphStyle(
-            "price", parent=base, fontName=_FONT_BOLD, fontSize=11,
-            alignment=TA_RIGHT,
+            "price", parent=base, fontName=_FONT_BOLD, fontSize=12,
+            alignment=TA_RIGHT, textColor=_ACCENT,
+        ),
+        "total_label": ParagraphStyle(
+            "total_label", parent=base, fontName=_FONT_BOLD, fontSize=12,
         ),
         "total": ParagraphStyle(
-            "total", parent=base, fontName=_FONT_BOLD, fontSize=13,
-            alignment=TA_RIGHT,
+            "total", parent=base, fontName=_FONT_BOLD, fontSize=14,
+            alignment=TA_RIGHT, textColor=_ACCENT,
         ),
         "foot": ParagraphStyle(
             "foot", parent=base, fontSize=8, alignment=TA_CENTER,
@@ -236,55 +255,103 @@ def build_offer_pdf(
         except Exception:  # noqa: BLE001 — лого не критично
             pass
 
-    story.append(Paragraph(settings.shop_name, st["title"]))
-    story.append(
-        Paragraph(
-            f"Подбор техники · {datetime.now():%d.%m.%Y}", st["sub"]
+    header = Table(
+        [
+            [
+                Paragraph(html.escape(settings.shop_name), st["title"]),
+                Paragraph(f"{datetime.now():%d.%m.%Y}", st["date"]),
+            ],
+            [Paragraph("Персональный подбор техники", st["sub"]), ""],
+        ],
+        colWidths=[134 * mm, 40 * mm],
+    )
+    header.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]
         )
     )
-    story.append(Spacer(1, 4 * mm))
-    story.append(HRFlowable(width="100%", color=colors.HexColor("#dddddd")))
-    story.append(Spacer(1, 4 * mm))
+    story.append(header)
+    story.append(Spacer(1, 3 * mm))
+    # Акцентная полоса под шапкой — фирменный штрих документа.
+    story.append(HRFlowable(width="100%", thickness=2.2, color=_ACCENT))
+    story.append(Spacer(1, 5 * mm))
 
     # ── Позиции ──────────────────────────────────────────────────────────────
     # Фото грузим один раз. Колонка с фото добавляется, только если хоть у одного
     # товара картинка скачалась — иначе пустой столбец зря занимает место.
-    photos = [_image_flowable(it.product.image_url, 22 * mm) for it in selection.matched]
+    photos = [_image_flowable(it.product.image_url, 32 * mm) for it in selection.matched]
     has_photos = any(ph != "" for ph in photos)
 
     rows: list[list] = []
     for i, item in enumerate(selection.matched, 1):
         p = item.product
-        name_cell = [Paragraph(p.title, st["item"])]
+        title = html.escape(p.title)
+        url = html.escape(p.url, quote=True) if p.url else ""
+        # Название — кликабельная ссылка на карточку товара (цвет оставляем
+        # тёмным для читаемости и печати; отдельная явная ссылка — строкой ниже).
+        name_markup = f'<link href="{url}">{title}</link>' if url else title
+        name_cell = [Paragraph(name_markup, st["item"])]
         attrs = _attrs_line(p.attributes)
         if attrs:
-            name_cell.append(Paragraph(attrs, st["attrs"]))
+            name_cell.append(Spacer(1, 1.2 * mm))
+            name_cell.append(Paragraph(html.escape(attrs), st["attrs"]))
+        if url:
+            name_cell.append(Spacer(1, 1.2 * mm))
+            name_cell.append(
+                Paragraph(f'<link href="{url}">Смотреть на сайте →</link>', st["link"])
+            )
         price_cell = Paragraph(_fmt_price(p.price), st["price"])
         if has_photos:
-            rows.append([Paragraph(str(i), st["base"]), photos[i - 1], name_cell, price_cell])
+            rows.append([Paragraph(str(i), st["attrs"]), photos[i - 1], name_cell, price_cell])
         else:
-            rows.append([Paragraph(str(i), st["base"]), name_cell, price_cell])
+            rows.append([Paragraph(str(i), st["attrs"]), name_cell, price_cell])
 
     if rows:
-        col_widths = [7 * mm, 26 * mm, 107 * mm, 34 * mm] if has_photos else [8 * mm, 132 * mm, 34 * mm]
+        col_widths = [7 * mm, 36 * mm, 97 * mm, 34 * mm] if has_photos else [8 * mm, 132 * mm, 34 * mm]
         table = Table(rows, colWidths=col_widths)
         table.setStyle(
             TableStyle(
                 [
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 6),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                    ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.HexColor("#eeeeee")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 7),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                    ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.HexColor("#e6e9ee")),
+                    # Мягкая «зебра» — чётные позиции на чуть сером фоне.
+                    ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, _ZEBRA]),
                 ]
             )
         )
         story.append(table)
-        story.append(Spacer(1, 4 * mm))
-        story.append(HRFlowable(width="100%", color=colors.HexColor("#dddddd")))
-        story.append(Spacer(1, 3 * mm))
-        story.append(
-            Paragraph(f"Итого: {_fmt_price(selection.total_price)}", st["total"])
+        story.append(Spacer(1, 5 * mm))
+
+        # Итого — выделенный блок с мягким фоном.
+        total = Table(
+            [[
+                Paragraph("Итого", st["total_label"]),
+                Paragraph(_fmt_price(selection.total_price), st["total"]),
+            ]],
+            colWidths=[140 * mm, 34 * mm],
         )
+        total.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), _ACCENT_SOFT),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                    ("LINEABOVE", (0, 0), (-1, 0), 1.2, _ACCENT),
+                ]
+            )
+        )
+        story.append(total)
     else:
         story.append(
             Paragraph("По вашему запросу подходящих позиций не найдено.", st["base"])
@@ -292,7 +359,15 @@ def build_offer_pdf(
 
     # ── Подвал: контакты + дисклеймер ────────────────────────────────────────
     story.append(Spacer(1, 10 * mm))
-    foot_bits = [b for b in (settings.shop_contacts, settings.shop_site) if b]
+    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#dddddd")))
+    story.append(Spacer(1, 3 * mm))
+    foot_bits = []
+    if settings.shop_contacts:
+        foot_bits.append(html.escape(settings.shop_contacts))
+    if settings.shop_site:
+        site = html.escape(settings.shop_site, quote=True)
+        label = html.escape(settings.shop_site.removeprefix("https://").removeprefix("http://").rstrip("/"))
+        foot_bits.append(f'<link href="{site}" color="#2b6cb0">{label}</link>')
     if foot_bits:
         story.append(Paragraph("  ·  ".join(foot_bits), st["foot"]))
     story.append(
