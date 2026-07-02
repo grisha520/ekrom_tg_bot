@@ -117,6 +117,56 @@ def test_select_one_returns_unmatched_when_empty():
     assert item.is_matched is False
 
 
+# ── Конфликт подтипов: кофемашина vs кофеварка, камера vs ларь ───────────────
+
+def _spec_raw(text: str) -> ProductSpec:
+    return ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text=text)
+
+
+def test_coffee_machine_request_drops_coffee_makers():
+    sel = ProductSelector(segment="средний")
+    cands = [_p("Кофеварка Vard VCPA1V", 100), _p("Кофемашина Jacky's JC BB45C", 120)]
+    ranked = sel.ranked_candidates(_spec_raw("кофемашина автоматическая"), cands)
+    assert [c.title for c in ranked] == ["Кофемашина Jacky's JC BB45C"]
+
+
+def test_coffee_maker_request_drops_machines():
+    sel = ProductSelector(segment="средний")
+    cands = [_p("Кофеварка Vard VCPA1V", 100), _p("Кофемашина Jacky's JC BB45C", 120)]
+    ranked = sel.ranked_candidates(_spec_raw("кофеварка капельная"), cands)
+    assert [c.title for c in ranked] == ["Кофеварка Vard VCPA1V"]
+
+
+def test_freezer_chamber_request_drops_chest_freezers():
+    sel = ProductSelector(segment="средний")
+    cands = [_p("Морозильный ларь Бирюса 200VK", 100), _p("Морозильная камера Korting KNFR", 120)]
+    ranked = sel.ranked_candidates(_spec_raw("морозильная камера"), cands)
+    assert [c.title for c in ranked] == ["Морозильная камера Korting KNFR"]
+
+
+def test_chest_freezer_request_drops_chambers():
+    sel = ProductSelector(segment="средний")
+    cands = [_p("Морозильный ларь Бирюса 200VK", 100), _p("Морозильная камера Korting KNFR", 120)]
+    ranked = sel.ranked_candidates(_spec_raw("морозильный ларь"), cands)
+    assert [c.title for c in ranked] == ["Морозильный ларь Бирюса 200VK"]
+
+
+def test_silent_subtype_title_not_dropped():
+    # Название без обоих стемов пары («Suprema X100») — молчание не конфликт.
+    sel = ProductSelector(segment="средний")
+    cands = [_p("Suprema X100 espresso", 100)]
+    ranked = sel.ranked_candidates(_spec_raw("кофемашина автоматическая"), cands)
+    assert len(ranked) == 1
+
+
+def test_no_subtype_in_request_keeps_everything():
+    # Клиент не называл подтип — не отсеиваем ничего.
+    sel = ProductSelector(segment="средний")
+    cands = [_p("Морозильный ларь Бирюса", 100), _p("Морозильная камера Korting", 120)]
+    ranked = sel.ranked_candidates(_spec_raw("морозилка в гараж"), cands)
+    assert len(ranked) == 2
+
+
 # ── #1 Позитивная валидация: отсев явных противоречий ────────────────────────
 
 def test_color_declension_normalized():

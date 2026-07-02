@@ -78,6 +78,37 @@ _FUEL_STEMS: tuple[tuple[str, str], ...] = (
 )
 
 
+# Взаимоисключающие подтипы товара (по стемам). Категории ekrom смешивают близкие
+# типы (в «Кофемашинах» треть — кофеварки, в «Морозильных камерах» — лари), и
+# «средний» по цене выбор попадал не в тот подтип. Если клиент явно назвал один
+# подтип пары, товары с противоположным подтипом в названии отсеиваются. Молчание
+# (в названии нет ни того ни другого стема) — не конфликт.
+_SUBTYPE_PAIRS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"кофемашин"}), frozenset({"кофеварк"})),
+    (frozenset({"камер"}), frozenset({"ларь", "лари", "ларе"})),
+)
+
+
+def _has_stem(text: str, stems: frozenset[str]) -> bool:
+    return any(s in text for s in stems)
+
+
+def _subtype_conflict(request_text: str, title: str) -> bool:
+    """Назван ли в запросе один подтип пары, а в названии — противоположный."""
+    req = (request_text or "").lower()
+    low = (title or "").lower()
+    for a, b in _SUBTYPE_PAIRS:
+        for want, other in ((a, b), (b, a)):
+            if (
+                _has_stem(req, want)
+                and not _has_stem(req, other)
+                and _has_stem(low, other)
+                and not _has_stem(low, want)
+            ):
+                return True
+    return False
+
+
 def _canon_fuel(fuel: str) -> str:
     f = fuel.strip().lower()
     for stem, canon in _FUEL_STEMS:
@@ -313,6 +344,11 @@ class ProductSelector:
         return not _color_conflict(_canon_color(spec.color), title_colors)
 
     def _passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
+        # Конфликт подтипов («кофемашина» vs кофеварка, «камера» vs ларь): клиент
+        # явно назвал подтип — противоположный в названии товара отсеиваем.
+        if spec.raw_text and _subtype_conflict(spec.raw_text, product.title):
+            return False
+
         colors = _product_colors(product)
 
         # Жёсткие исключения по цвету («не чёрную») и топливу («кроме газовых»).
