@@ -26,6 +26,7 @@ from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeChat,
     CallbackQuery,
     FSInputFile,
     InlineKeyboardButton,
@@ -55,7 +56,6 @@ from .messenger.client_ux import (
     examples_inline_keyboard,
     examples_text,
     followup_keyboard,
-    followup_text,
     format_client_selection,
     format_history_list,
     history_inline_keyboard,
@@ -102,6 +102,8 @@ def _tier_store_put(token: str, state: _TierState) -> None:
     _TIER_STORE[token] = state
     while len(_TIER_STORE) > _TIER_STORE_MAX:
         _TIER_STORE.pop(next(iter(_TIER_STORE)))
+
+
 # Не даём одному чату запускать два тяжёлых процесса одновременно.
 _BUSY: dict[int, asyncio.Lock] = {}
 # Playwright/ekrom — один браузерный процесс за раз (иначе /login и подбор конфликтуют).
@@ -159,10 +161,6 @@ def _is_operator(user_id: int | None) -> bool:
     if user_id is None:
         return False
     return _managers().contains(user_id) or _is_admin(user_id)
-
-
-# Совместимость со старым именем (доступ оператора).
-_user_allowed = _is_operator
 
 
 # Операторы, включившие «клиентский предпросмотр» (/preview): бот показывает им
@@ -266,7 +264,7 @@ class AccessLogMiddleware(BaseMiddleware):
         user = getattr(event, "from_user", None)
         if user is not None:
             uname = f"@{user.username}" if user.username else "без username"
-            if _user_allowed(user.id):
+            if _is_operator(user.id):
                 logger.info(
                     "Обращение: user_id=%s %s (%s) — доступ разрешён",
                     user.id, uname, user.full_name,
@@ -350,13 +348,14 @@ BTN_STATUS = "🔁 Проверить вход"
 BTN_LOGIN = "🔐 Обновить вход"
 BTN_MANAGERS = "👥 Менеджеры"
 BTN_STATS = "📊 Статистика"
+BTN_PREVIEW = "👀 Как видит клиент"
 
 
 def _main_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Постоянная клавиатура под полем ввода. Админу добавляется «👥 Менеджеры»."""
     rows = [
         [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_LOGIN)],
-        [KeyboardButton(text=BTN_HELP)],
+        [KeyboardButton(text=BTN_HELP), KeyboardButton(text=BTN_PREVIEW)],
     ]
     if is_admin:
         rows.append([KeyboardButton(text=BTN_MANAGERS), KeyboardButton(text=BTN_STATS)])
@@ -391,7 +390,7 @@ def _help_text(is_admin: bool = False) -> str:
         f"{BTN_STATUS} — проверить сессию ekrom\n"
         f"{BTN_LOGIN} — обновить вход в ekrom\n"
         f"{BTN_HELP} — эта справка\n"
-        "/preview — посмотреть бота глазами клиента (повторно — выйти)\n"
+        f"{BTN_PREVIEW} — посмотреть бота глазами клиента (выйти — /preview)\n"
     )
     if is_admin:
         text += (
@@ -548,7 +547,7 @@ async def cmd_stats(message: Message) -> None:
 
 
 async def cmd_status(message: Message) -> None:
-    if not _user_allowed(message.from_user.id if message.from_user else None):
+    if not _is_operator(message.from_user.id if message.from_user else None):
         await _deny(message)
         return
     status = await message.answer("⏳ Проверяю сессию ekrom…")
@@ -571,7 +570,7 @@ async def cmd_status(message: Message) -> None:
 
 
 async def cmd_login(message: Message) -> None:
-    if not _user_allowed(message.from_user.id if message.from_user else None):
+    if not _is_operator(message.from_user.id if message.from_user else None):
         await _deny(message)
         return
     status = await message.answer(
@@ -629,6 +628,9 @@ async def handle_text(message: Message) -> None:
             return
         if text == BTN_LOGIN:
             await cmd_login(message)
+            return
+        if text == BTN_PREVIEW:
+            await cmd_preview(message)
             return
         if _is_admin(uid) and text == BTN_MANAGERS:
             await _show_managers(message)
@@ -756,14 +758,8 @@ async def _run_pick(
                     )
                     # PDF намеренно НЕ формируем автоматически: клиент сначала
                     # выбирает ценовой уровень (табы), затем жмёт «📄 Скачать PDF
-                    # этого варианта» — меньше спама файлами и нагрузки.
-                    s = get_settings()
-                    await message.answer(
-                        followup_text(s),
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=followup_keyboard(s),
-                        disable_web_page_preview=True,
-                    )
+                    # этого варианта». Отдельное followup-сообщение не шлём —
+                    # контакты/примеры/история и так на клавиатуре клиента.
                 else:
                     await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
                 # Оператор в /preview тестирует сам — лид о нём не шлём (шум).
@@ -800,7 +796,7 @@ async def callback_pdf(callback: CallbackQuery) -> None:
     if not callback.data or not callback.message:
         await callback.answer()
         return
-    if not _user_allowed(callback.from_user and callback.from_user.id):
+    if not _is_operator(callback.from_user and callback.from_user.id):
         await callback.answer("Доступ запрещён", show_alert=True)
         return
 
@@ -1209,24 +1205,27 @@ async def main() -> None:
     bot = _make_bot(settings)
     await _wait_telegram(bot)
     try:
-        if settings.client_mode:
-            commands = [
-                BotCommand(command="start", description="🏠 Начать"),
-                BotCommand(command="history", description="📂 Мои подборы"),
-                BotCommand(command="examples", description="💡 Примеры запросов"),
-                BotCommand(command="contacts", description="📞 Контакты магазина"),
-            ]
-        else:
-            commands = [
-                BotCommand(command="start", description="ℹ️ Как пользоваться"),
-                BotCommand(command="status", description="🔁 Проверить вход в ekrom"),
-                BotCommand(command="login", description="🔐 Обновить вход в ekrom"),
-            ]
-        if settings.admin_user_ids:
-            commands = list(commands) + [
-                BotCommand(command="stats", description="📊 Статистика (админ)"),
-            ]
-        await bot.set_my_commands(commands)
+        # Общее меню — только /start: всё остальное у клиента и оператора есть
+        # кнопками на клавиатуре (дублировать в меню — шум, а админские команды
+        # в общем меню видели бы все клиенты).
+        await bot.set_my_commands([
+            BotCommand(command="start", description="🏠 Начать"),
+        ])
+        # Админам — персональное меню со служебными командами (виден только им).
+        for admin_id in settings.admin_user_ids:
+            try:
+                await bot.set_my_commands(
+                    [
+                        BotCommand(command="start", description="ℹ️ Как пользоваться"),
+                        BotCommand(command="preview", description="👀 Как видит клиент"),
+                        BotCommand(command="status", description="🔁 Проверить вход в ekrom"),
+                        BotCommand(command="login", description="🔐 Обновить вход в ekrom"),
+                        BotCommand(command="stats", description="📊 Статистика"),
+                    ],
+                    scope=BotCommandScopeChat(chat_id=admin_id),
+                )
+            except Exception:  # noqa: BLE001 — админ мог не открывать чат с ботом
+                pass
     except Exception:  # noqa: BLE001 — меню команд не критично
         logger.warning("не удалось установить меню команд", exc_info=True)
     dp = _build_dispatcher()
