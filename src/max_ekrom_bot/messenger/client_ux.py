@@ -92,16 +92,41 @@ def examples_text() -> str:
     return "\n".join(lines)
 
 
+# Шоурумы и почта — со страницы контактов ekrom.ru/contacts/ (при смене данных
+# на сайте поправить здесь).
+_SHOP_EMAIL = "sale@ekrom.ru"
+_SHOWROOMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "Екатеринбург",
+        (
+            "ИЦ «Уют Холл» — ул. Толмачева, 22, 2 этаж · ежедневно 10:00–20:00",
+            "ИЦ ASTROOM — ул. Цвиллинга, 1, корп. Б, 9 этаж · ежедневно 10:00–20:00",
+            "МЦ ЭМА — Верх-Исетский бул., 13, 5 этаж · ежедневно 10:00–20:00",
+        ),
+    ),
+    (
+        "Тюмень",
+        (
+            "Шоурум — ул. Герцена, 55 · пн–пт 9:00–20:00, сб–вс 10:00–18:00",
+        ),
+    ),
+)
+
+
 def contacts_text(settings: Settings) -> str:
     shop = html.escape(settings.shop_name)
     site = html.escape(settings.shop_site.rstrip("/"))
     contacts = html.escape(settings.shop_contacts.strip()) if settings.shop_contacts else ""
     body = f"📞 <b>Контакты {shop}</b>\n\n"
     if contacts:
-        body += f"{contacts}\n\n"
-    else:
-        body += "Менеджер поможет уточнить наличие и оформить заказ.\n\n"
-    body += f"🌐 Сайт: <a href=\"{site}\">{site}</a>\n\n"
+        body += f"{contacts}\n"
+    body += f"✉️ {_SHOP_EMAIL}\n\n"
+    body += "🏬 <b>Шоурумы — посмотреть технику вживую</b>\n"
+    for city, rooms in _SHOWROOMS:
+        body += f"\n<b>{html.escape(city)}</b>\n"
+        for room in rooms:
+            body += f"• {html.escape(room)}\n"
+    body += f"\n🌐 Сайт: <a href=\"{site}\">{site}</a>\n\n"
     body += "<i>После подбора менеджер свяжется с вами при необходимости.</i>"
     return body
 
@@ -116,23 +141,38 @@ def examples_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _phone_url(contacts: str) -> str | None:
+def _phone_digits(contacts: str) -> str | None:
     m = re.search(r"(\+7[\d\s\-()]{10,})", contacts)
     if not m:
         return None
     digits = re.sub(r"\D", "", m.group(1))
-    if len(digits) >= 11:
-        return f"tel:+{digits}" if not digits.startswith("+") else f"tel:{digits}"
-    return None
+    return digits if len(digits) >= 11 else None
+
+
+def _phone_url(contacts: str) -> str | None:
+    digits = _phone_digits(contacts)
+    return f"tel:+{digits}" if digits else None
+
+
+def _whatsapp_url(contacts: str) -> str | None:
+    # На странице контактов ekrom указан WhatsApp на основном номере.
+    digits = _phone_digits(contacts)
+    return f"https://wa.me/{digits}" if digits else None
 
 
 def followup_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     site = settings.shop_site.rstrip("/")
     rows.append([InlineKeyboardButton(text="🌐 Сайт ekrom", url=site)])
+    contact_row: list[InlineKeyboardButton] = []
     tel = _phone_url(settings.shop_contacts)
     if tel:
-        rows.append([InlineKeyboardButton(text="📞 Позвонить", url=tel)])
+        contact_row.append(InlineKeyboardButton(text="📞 Позвонить", url=tel))
+    wa = _whatsapp_url(settings.shop_contacts)
+    if wa:
+        contact_row.append(InlineKeyboardButton(text="💬 WhatsApp", url=wa))
+    if contact_row:
+        rows.append(contact_row)
     rows.append([InlineKeyboardButton(text="💡 Ещё примеры", callback_data="ex:menu")])
     rows.append([InlineKeyboardButton(text=BTN_HISTORY, callback_data="hist:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

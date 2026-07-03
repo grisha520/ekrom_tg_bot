@@ -42,3 +42,42 @@ def test_example_queries_non_empty():
 
 def test_smalltalk_reply_friendly():
     assert "💡" in smalltalk_reply("ekrom") or "Примеры" in smalltalk_reply("ekrom")
+
+
+def test_contacts_text_includes_showrooms_and_email():
+    from max_ekrom_bot.messenger.client_ux import contacts_text
+
+    s = Settings(
+        LLM_PROVIDER="rule",
+        SHOP_CONTACTS="+7 (343) 379-98-68, ежедневно 9:00-18:00",
+        SHOP_SITE="https://www.ekrom.ru",
+    )
+    out = contacts_text(s)
+    assert "sale@ekrom.ru" in out
+    assert "Толмачева, 22" in out
+    assert "Цвиллинга, 1" in out
+    assert "Верх-Исетский" in out
+    assert "Тюмень" in out and "Герцена, 55" in out
+
+
+def test_followup_keyboard_has_whatsapp_and_call():
+    from max_ekrom_bot.messenger.client_ux import followup_keyboard
+
+    s = Settings(
+        LLM_PROVIDER="rule",
+        SHOP_CONTACTS="+7 (343) 379-98-68",
+        SHOP_SITE="https://www.ekrom.ru",
+    )
+    kb = followup_keyboard(s)
+    urls = [b.url for row in kb.inline_keyboard for b in row if b.url]
+    assert any(u.startswith("https://wa.me/7343") for u in urls)
+    assert any(u.startswith("tel:+7343") for u in urls)
+
+
+def test_followup_keyboard_without_phone_skips_contact_row():
+    from max_ekrom_bot.messenger.client_ux import followup_keyboard
+
+    s = Settings(LLM_PROVIDER="rule", SHOP_CONTACTS="", SHOP_SITE="https://x.ru")
+    kb = followup_keyboard(s)
+    urls = [b.url for row in kb.inline_keyboard for b in row if b.url]
+    assert not any("wa.me" in u or u.startswith("tel:") for u in urls)
