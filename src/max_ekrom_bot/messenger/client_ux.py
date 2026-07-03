@@ -253,3 +253,39 @@ def history_inline_keyboard(records: list[PickRecord]) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=label[:64], callback_data=f"hist:{rec.id}"),
         ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── Ценовые уровни комплекта (бюджет / оптимум / премиум) ─────────────────────
+
+# Порядок = порядок табов. optimal — «как сейчас» (сегмент запроса клиента).
+TIER_ORDER: tuple[str, ...] = ("budget", "optimal", "premium")
+TIER_TITLES: dict[str, str] = {
+    "budget": "💰 Бюджетный",
+    "optimal": "⭐ Оптимальный",
+    "premium": "💎 Премиум",
+}
+TIER_PDF_LABELS: dict[str, str] = {
+    "budget": "Бюджетный вариант",
+    "optimal": "Оптимальный вариант",
+    "premium": "Премиум-вариант",
+}
+
+
+def tier_keyboard(token: str, active: str) -> InlineKeyboardMarkup:
+    """Табы уровней (актив помечен галочкой) + кнопка PDF активного уровня."""
+    tabs = [
+        InlineKeyboardButton(
+            text=("✓ " if lvl == active else "") + TIER_TITLES[lvl],
+            callback_data=f"tier:{token}:{lvl}",
+        )
+        for lvl in TIER_ORDER
+    ]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            tabs,
+            [InlineKeyboardButton(
+                text="📄 Скачать PDF этого варианта",
+                callback_data=f"tierpdf:{token}",
+            )],
+        ]
+    )

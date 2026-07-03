@@ -222,9 +222,14 @@ def _styles() -> dict[str, ParagraphStyle]:
 
 
 def build_offer_pdf(
-    selection: SelectionResult, settings, out_path: str | Path | None = None
+    selection: SelectionResult, settings, out_path: str | Path | None = None,
+    tier_label: str | None = None,
 ) -> Path:
-    """Сформировать клиентский PDF-подбор и вернуть путь к файлу."""
+    """Сформировать клиентский PDF-подбор и вернуть путь к файлу.
+
+    tier_label — подпись ценового уровня комплекта («Бюджетный вариант» и т.п.),
+    выводится в подзаголовке шапки.
+    """
     _register_font(getattr(settings, "pdf_font_path", "") or "")
     st = _styles()
 
@@ -266,7 +271,14 @@ def build_offer_pdf(
                 Paragraph(html.escape(settings.shop_name), st["title"]),
                 Paragraph(f"{datetime.now():%d.%m.%Y}", st["date"]),
             ],
-            [Paragraph("Персональный подбор техники", st["sub"]), ""],
+            [
+                Paragraph(
+                    "Персональный подбор техники"
+                    + (f" · {html.escape(tier_label)}" if tier_label else ""),
+                    st["sub"],
+                ),
+                "",
+            ],
         ],
         colWidths=[134 * mm, 40 * mm],
     )

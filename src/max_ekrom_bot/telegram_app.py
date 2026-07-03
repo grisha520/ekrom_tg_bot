@@ -63,10 +63,12 @@ from .messenger.client_ux import (
     is_smalltalk,
     pdf_caption,
     smalltalk_reply,
+    TIER_PDF_LABELS,
+    tier_keyboard,
     welcome_text,
 )
 from .messenger.telegram_format import format_selection
-from .models import SelectionResult
+from .models import CustomerRequest, SelectionResult
 from .pdf import build_offer_pdf
 from .pick_history import PickHistoryStore
 from .pipeline import Pipeline
@@ -80,8 +82,28 @@ class _Pending:
     selection: SelectionResult
 
 
+@dataclass
+class _TierState:
+    """Клиентский подбор с переключаемыми ценовыми уровнями комплекта."""
+
+    request: CustomerRequest
+    query_text: str
+    selections: dict[str, SelectionResult]  # level -> собранный комплект
+    level: str = "optimal"  # активный уровень
+
+
 # Подборы между шагом «превью» и нажатием «Сформировать PDF».
 _STORE: dict[str, _Pending] = {}
+# Клиентские подборы с уровнями (кнопки живут дольше диалога — храним с капом).
+_TIER_STORE: dict[str, _TierState] = {}
+_TIER_STORE_MAX = 300
+
+
+def _tier_store_put(token: str, state: _TierState) -> None:
+    """Сохранить состояние уровней, вытесняя старейшие записи (FIFO-кап)."""
+    _TIER_STORE[token] = state
+    while len(_TIER_STORE) > _TIER_STORE_MAX:
+        _TIER_STORE.pop(next(iter(_TIER_STORE)))
 # Не даём одному чату запускать два тяжёлых процесса одновременно.
 _BUSY: dict[int, asyncio.Lock] = {}
 # Playwright/ekrom — один браузерный процесс за раз (иначе /login и подбор конфликтуют).
@@ -722,9 +744,17 @@ async def _run_pick(
 
             if client:
                 if selection.matched:
+                    # Табы ценовых уровней: бюджет / оптимум / премиум.
+                    token = uuid.uuid4().hex
+                    _tier_store_put(token, _TierState(
+                        request=request,
+                        query_text=text,
+                        selections={"optimal": selection},
+                    ))
                     await status.edit_text(
                         preview, parse_mode=ParseMode.HTML,
                         disable_web_page_preview=True,
+                        reply_markup=tier_keyboard(token, "optimal"),
                     )
                     await message.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
                     pdf_status = await message.answer(
@@ -928,6 +958,149 @@ async def callback_history(callback: CallbackQuery) -> None:
     )
 
 
+async def callback_tier(callback: CallbackQuery) -> None:
+    """Переключение ценового уровня комплекта (бюджет / оптимум / премиум).
+
+    Уровень применяется к комплекту целиком. Уже собранные уровни кэшируются в
+    _TIER_STORE — повторные переключения мгновенные; новый уровень пересобирается
+    из кэша каталога (LLM не вызывается — CustomerRequest уже разобран).
+    """
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    uid = callback.from_user.id if callback.from_user else None
+    if not get_settings().client_mode or _acts_as_operator(uid):
+        await callback.answer()
+        return
+    try:
+        _, token, level = callback.data.split(":", 2)
+    except ValueError:
+        await callback.answer()
+        return
+    state = _TIER_STORE.get(token)
+    if state is None:
+        await callback.answer("Подбор устарел — отправьте запрос заново.", show_alert=True)
+        return
+    if level == state.level:
+        await callback.answer("Этот вариант уже показан")
+        return
+
+    if level not in state.selections:
+        chat_id = callback.message.chat.id
+        lock = _chat_lock(chat_id)
+        if lock.locked():
+            await callback.answer("⏳ Уже собираю — подождите.", show_alert=True)
+            return
+        await callback.answer("⏳ Пересобираю комплект…")
+        t0 = time.perf_counter()
+        queue_wait = 0.0
+        selection: SelectionResult | None = None
+        async with lock:
+            try:
+                pipeline = Pipeline(get_settings())
+                queue_t0 = time.perf_counter()
+                async with _EKROM_LOCK:
+                    queue_wait = time.perf_counter() - queue_t0
+                    selection = await pipeline.select_products(
+                        state.request,
+                        enrich_chosen=True,
+                        level=None if level == "optimal" else level,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.exception("tier reselect failed")
+                await callback.message.answer(
+                    "😔 Не удалось пересобрать сейчас — попробуйте чуть позже."
+                )
+                return
+            finally:
+                _record_pick_metric(
+                    uid,
+                    client=True,
+                    success=selection is not None,
+                    matched_count=len(selection.matched) if selection else 0,
+                    duration_sec=time.perf_counter() - t0,
+                    queue_wait_sec=queue_wait,
+                )
+        state.selections[level] = selection
+    else:
+        await callback.answer()
+
+    new_sel = state.selections[level]
+    if not new_sel.matched:
+        await callback.answer(
+            "В этом уровне подходящих вариантов не нашлось.", show_alert=True
+        )
+        state.selections.pop(level, None)
+        return
+
+    prev_urls = {i.product.url for i in state.selections[state.level].matched}
+    new_urls = {i.product.url for i in new_sel.matched}
+    state.level = level
+
+    preview = format_client_selection(new_sel, get_settings().shop_name)
+    if len(preview) > 4000:
+        preview = preview[:3990] + "…"
+    try:
+        await callback.message.edit_text(
+            preview,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=tier_keyboard(token, level),
+        )
+    except Exception:  # noqa: BLE001 — «message is not modified» при том же составе
+        if new_urls == prev_urls:
+            await callback.answer("Здесь получается тот же комплект 👍", show_alert=True)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=tier_keyboard(token, level))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def callback_tier_pdf(callback: CallbackQuery) -> None:
+    """PDF активного ценового уровня (по кнопке, чтобы не спамить файлами)."""
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    uid = callback.from_user.id if callback.from_user else None
+    if not get_settings().client_mode or _acts_as_operator(uid):
+        await callback.answer()
+        return
+    token = callback.data.removeprefix("tierpdf:")
+    state = _TIER_STORE.get(token)
+    if state is None:
+        await callback.answer("Подбор устарел — отправьте запрос заново.", show_alert=True)
+        return
+    selection = state.selections.get(state.level)
+    if selection is None or not selection.matched:
+        await callback.answer("Нечего выгружать — соберите вариант заново.", show_alert=True)
+        return
+
+    await callback.answer("📄 Готовлю PDF…")
+    label = TIER_PDF_LABELS.get(state.level, "")
+    try:
+        pdf_path = await asyncio.to_thread(
+            build_offer_pdf, selection, get_settings(), None, label
+        )
+        await callback.message.answer_document(
+            FSInputFile(pdf_path), caption=f"📄 {label} · {_fmt_total(selection)}"
+        )
+        if uid is not None:
+            _history().add(
+                uid,
+                f"{state.query_text} · {label}",
+                pdf_path,
+                total_price=selection.total_price,
+                matched_count=len(selection.matched),
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("tier pdf failed")
+        await callback.message.answer("Не удалось собрать PDF — попробуйте ещё раз.")
+
+
+def _fmt_total(selection: SelectionResult) -> str:
+    return f"{int(round(selection.total_price)):,}".replace(",", " ") + " ₽"
+
+
 async def callback_manage(callback: CallbackQuery) -> None:
     """Админские действия по инлайн-кнопкам: добавить/удалить/отклонить менеджера."""
     if not _is_admin(callback.from_user.id if callback.from_user else None):
@@ -1033,6 +1206,8 @@ def _build_dispatcher() -> Dispatcher:
     dp.callback_query.register(callback_pdf, F.data.startswith("pdf:"))
     dp.callback_query.register(callback_example, F.data.startswith("ex:"))
     dp.callback_query.register(callback_history, F.data.startswith("hist:"))
+    dp.callback_query.register(callback_tier_pdf, F.data.startswith("tierpdf:"))
+    dp.callback_query.register(callback_tier, F.data.startswith("tier:"))
     dp.callback_query.register(
         callback_manage,
         lambda q: bool(q.data) and q.data.split(":", 1)[0] in {"addmgr", "delmgr", "denymgr"},

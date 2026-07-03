@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+import statistics
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -175,7 +176,8 @@ class Pipeline:
         return request
 
     async def select_products(
-        self, request: CustomerRequest, enrich_chosen: bool = False
+        self, request: CustomerRequest, enrich_chosen: bool = False,
+        level: str | None = None,
     ) -> SelectionResult:
         """Найти и подобрать товары под каждую позицию запроса (параллельно).
 
@@ -186,8 +188,14 @@ class Pipeline:
         enrich_chosen=True — выбранный товар дочитывается (характеристики + фото)
         на том же браузере, для клиентского PDF. Стоит чуть больше времени, но не
         запускает второй браузер.
+
+        level — ценовой уровень комплекта («budget» / «premium» / None=оптимум):
+        реализован через сегментную стратегию селектора (эконом/премиум), для
+        премиума дополнительно действует кап цены (см. _select_available), чтобы
+        «премиум» не улетал в аномально дорогие выбросы каталога.
         """
-        selector = ProductSelector(segment=request.segment)
+        segment = {"budget": "эконом", "premium": "премиум"}.get(level or "", request.segment)
+        selector = ProductSelector(segment=segment)
         async with EkromClient(self._settings) as ekrom:
             sem = asyncio.Semaphore(_MAX_PARALLEL_SPECS)
 
@@ -197,7 +205,7 @@ class Pipeline:
                     try:
                         candidates = await self._candidates_for_spec(ekrom, spec, page)
                         item = await self._select_available(
-                            ekrom, selector, spec, candidates, page
+                            ekrom, selector, spec, candidates, page, level=level
                         )
                         if enrich_chosen and item.product is not None:
                             await ekrom.ensure_enriched(
@@ -217,6 +225,10 @@ class Pipeline:
             items = await asyncio.gather(*(handle(spec) for spec in request.specs))
         return SelectionResult(items=list(items))
 
+    # Кап премиум-уровня: не дороже стольких медиан по подходящим кандидатам —
+    # отсекает аномально дорогие выбросы (Smeg за 300к под запрос «плита»).
+    _PREMIUM_PRICE_CAP = 3.0
+
     async def _select_available(
         self,
         ekrom: EkromClient,
@@ -224,6 +236,7 @@ class Pipeline:
         spec: ProductSpec,
         candidates: list,
         page=None,
+        level: str | None = None,
     ) -> MatchedItem:
         """Подобрать первый подходящий товар в наличии с учётом бренда/модели.
 
@@ -242,6 +255,14 @@ class Pipeline:
                 candidates_count=len(candidates),
                 reason="Подходящих вариантов с ценой не найдено",
             )
+
+        # Премиум-уровень: убираем ценовые выбросы (дороже кап×медиана), чтобы
+        # «премиум» был верхом здравого диапазона, а не рекордом каталога.
+        if level == "premium" and len(ranked) > 1:
+            med = statistics.median(c.price or 0.0 for c in ranked)
+            capped = [c for c in ranked if (c.price or 0.0) <= med * self._PREMIUM_PRICE_CAP]
+            if capped:
+                ranked = capped
 
         want_model, want_brand, tiers = self._build_tiers(spec, ranked)
 
