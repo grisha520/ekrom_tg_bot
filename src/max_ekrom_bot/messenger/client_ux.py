@@ -149,11 +149,6 @@ def _phone_digits(contacts: str) -> str | None:
     return digits if len(digits) >= 11 else None
 
 
-def _phone_url(contacts: str) -> str | None:
-    digits = _phone_digits(contacts)
-    return f"tel:+{digits}" if digits else None
-
-
 def _whatsapp_url(contacts: str) -> str | None:
     # На странице контактов ekrom указан WhatsApp на основном номере.
     digits = _phone_digits(contacts)
@@ -161,18 +156,15 @@ def _whatsapp_url(contacts: str) -> str | None:
 
 
 def followup_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    # ВАЖНО: inline-кнопки Telegram принимают только http/https-URL — «tel:»
+    # сервер отвергает целиком всё сообщение (Bad Request). Телефон кликабелен
+    # прямо в тексте контактов, поэтому кнопки «Позвонить» нет.
     rows: list[list[InlineKeyboardButton]] = []
     site = settings.shop_site.rstrip("/")
     rows.append([InlineKeyboardButton(text="🌐 Сайт ekrom", url=site)])
-    contact_row: list[InlineKeyboardButton] = []
-    tel = _phone_url(settings.shop_contacts)
-    if tel:
-        contact_row.append(InlineKeyboardButton(text="📞 Позвонить", url=tel))
     wa = _whatsapp_url(settings.shop_contacts)
     if wa:
-        contact_row.append(InlineKeyboardButton(text="💬 WhatsApp", url=wa))
-    if contact_row:
-        rows.append(contact_row)
+        rows.append([InlineKeyboardButton(text="💬 Написать в WhatsApp", url=wa)])
     rows.append([InlineKeyboardButton(text="💡 Ещё примеры", callback_data="ex:menu")])
     rows.append([InlineKeyboardButton(text=BTN_HISTORY, callback_data="hist:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -60,7 +60,7 @@ def test_contacts_text_includes_showrooms_and_email():
     assert "Тюмень" in out and "Герцена, 55" in out
 
 
-def test_followup_keyboard_has_whatsapp_and_call():
+def test_followup_keyboard_has_whatsapp_and_no_tel():
     from max_ekrom_bot.messenger.client_ux import followup_keyboard
 
     s = Settings(
@@ -71,7 +71,8 @@ def test_followup_keyboard_has_whatsapp_and_call():
     kb = followup_keyboard(s)
     urls = [b.url for row in kb.inline_keyboard for b in row if b.url]
     assert any(u.startswith("https://wa.me/7343") for u in urls)
-    assert any(u.startswith("tel:+7343") for u in urls)
+    # tel:-URL Telegram отвергает (Bad Request на всё сообщение) — их быть не должно
+    assert not any(u.startswith("tel:") for u in urls)
 
 
 def test_followup_keyboard_without_phone_skips_contact_row():
@@ -80,4 +81,4 @@ def test_followup_keyboard_without_phone_skips_contact_row():
     s = Settings(LLM_PROVIDER="rule", SHOP_CONTACTS="", SHOP_SITE="https://x.ru")
     kb = followup_keyboard(s)
     urls = [b.url for row in kb.inline_keyboard for b in row if b.url]
-    assert not any("wa.me" in u or u.startswith("tel:") for u in urls)
+    assert not any("wa.me" in u for u in urls)
