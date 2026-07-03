@@ -42,6 +42,12 @@ class PipelineResult:
 # Сколько кандидатов максимум проверять на странице товара (остальные — слишком медленно).
 _MAX_AVAILABILITY_CHECKS = 15
 
+# Сколько карточек максимум обогащать в одной группе кандидатов перед выбором.
+# Без лимита каждый запрос открывал бы десятки страниц ekrom; с лимитом идём
+# по ранжированному списку и открываем только тех, у кого характеристики
+# не подтверждены названием/кэшем (см. ProductSelector.needs_enrichment).
+_ENRICH_TOP_N = 10
+
 # Сколько страниц товаров максимум открывать при поиске точной модели (за ценой/
 # наличием). Ограничивает добавочное время для запросов с конкретным артикулом.
 _MAX_MODEL_FETCHES = 3
@@ -319,20 +325,38 @@ class Pipeline:
         tiers.append(("rest", rest))
         return want_model, want_brand, tiers
 
-    async def _first_available(self, ekrom, selector, spec, tiers, page):
-        """Первый подходящий товар по приоритету тиров (детерминированно).
+    async def _pick_from_group(
+        self,
+        ekrom: EkromClient,
+        selector: ProductSelector,
+        spec: ProductSpec,
+        group: list,
+        tier_name: str,
+        page,
+        *,
+        enrich_limit: int = _ENRICH_TOP_N,
+    ) -> tuple[CatalogProduct | None, str | None]:
+        """Первый подходящий товар из группы с обогащением top-N при необходимости.
 
-        Доступность оцениваем ОПТИМИСТИЧНО по данным карточки: отбрасываем только
-        товары, которые карточка ЯВНО пометила «нет в наличии». Страницу товара
-        ради статуса не открываем — на слабом сервере это медленно и ненадёжно
-        (карточки под нагрузкой не отдают статус → ложное «нет в наличии»).
-        Фактический состав всё равно перепроверяется при добавлении в корзину.
-
-        Цвет: если он подтверждён названием — доверяем карточке (быстрый путь).
-        Если нет (напр. «BLANC») — открываем страницу и валидируем по реальным
-        характеристикам; валидация снисходительна к оттенкам (графит≈чёрный), но
-        отсекает явно другой цвет.
+        Доступность оцениваем ОПТИМИСТИЧНО: отбрасываем только явный OOS.
+        Если запрошенная характеристика не подтверждена названием/кэшем —
+        открываем карточку (до enrich_limit раз) и перепроверяем фильтры.
         """
+        for product in group[:_MAX_AVAILABILITY_CHECKS]:
+            if product.in_stock is False:
+                continue
+            if selector.needs_enrichment(spec, product):
+                if enrich_limit <= 0:
+                    continue
+                await ekrom.ensure_enriched(product, page)
+                enrich_limit -= 1
+            if not selector.passes_filters(spec, product):
+                continue
+            return product, tier_name
+        return None, None
+
+    async def _first_available(self, ekrom, selector, spec, tiers, page):
+        """Первый подходящий товар по приоритету тиров (детерминированно)."""
         for tier_name, group in tiers:
             scan = group
             # Замена бренда/модели: запрошенного нет, берём аналог из «прочих».
@@ -341,14 +365,11 @@ class Pipeline:
             # замену, а не дорогую. На обычный подбор (без бренда) не влияет.
             if tier_name == "rest" and (spec.brand or spec.model):
                 scan = sorted(group, key=lambda p: p.price if p.price is not None else float("inf"))
-            for product in scan[:_MAX_AVAILABILITY_CHECKS]:
-                if product.in_stock is False:
-                    continue
-                if not selector.color_confirmed_by_title(spec, product):
-                    await ekrom.ensure_enriched(product, page)
-                    if not selector.passes_filters(spec, product):
-                        continue
-                return product, tier_name
+            product, picked_tier = await self._pick_from_group(
+                ekrom, selector, spec, scan, tier_name, page
+            )
+            if product is not None:
+                return product, picked_tier
         return None, None
 
     async def _rerank_with_llm(self, ekrom, selector, spec, tiers, page):

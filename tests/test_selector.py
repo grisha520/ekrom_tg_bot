@@ -265,3 +265,45 @@ def test_attribute_match_outranks_better_price():
     ranked = sel.ranked_candidates(spec, cands)
     assert ranked[0].title == "Духовка белая"
     assert len(ranked) == 3  # молчаливые не выброшены, только переранжированы
+
+
+def test_width_hard_filter_drops_mismatch():
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.OVEN, width_mm=600)
+    narrow = CatalogProduct(
+        title="Духовка", url="u/narrow", price=90, attributes={"Ширина, мм": "450"}
+    )
+    ok = CatalogProduct(
+        title="Духовка", url="u/ok", price=100, attributes={"Ширина, мм": "595"}
+    )
+    ranked = sel.ranked_candidates(spec, [narrow, ok])
+    assert len(ranked) == 1
+    assert ranked[0].url == "u/ok"
+
+
+def test_width_within_tolerance_kept():
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.OVEN, width_mm=600)
+    p = CatalogProduct(title="Духовка", url="u/ok", price=100, attributes={"Ширина, мм": "592"})
+    assert sel.ranked_candidates(spec, [p])
+
+
+def test_subtype_conflict_from_attributes():
+    sel = ProductSelector(segment="средний")
+    maker = CatalogProduct(
+        title="Suprema X100",
+        url="u/maker",
+        price=100,
+        attributes={"Тип": "Кофеварка капельная"},
+    )
+    machine = CatalogProduct(
+        title="Jacky's JC BB45C",
+        url="u/machine",
+        price=120,
+        attributes={"Тип": "Кофемашина автоматическая"},
+    )
+    ranked = sel.ranked_candidates(
+        _spec_raw("кофемашина автоматическая"), [maker, machine]
+    )
+    assert len(ranked) == 1
+    assert ranked[0].url == "u/machine"

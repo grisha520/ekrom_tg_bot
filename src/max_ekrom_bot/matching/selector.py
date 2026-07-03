@@ -81,22 +81,49 @@ _FUEL_STEMS: tuple[tuple[str, str], ...] = (
 # Взаимоисключающие подтипы товара (по стемам). Категории ekrom смешивают близкие
 # типы (в «Кофемашинах» треть — кофеварки, в «Морозильных камерах» — лари), и
 # «средний» по цене выбор попадал не в тот подтип. Если клиент явно назвал один
-# подтип пары, товары с противоположным подтипом в названии отсеиваются. Молчание
-# (в названии нет ни того ни другого стема) — не конфликт.
+# подтип пары, товары с противоположным подтипом в названии/атрибутах
+# отсеиваются. Молчание (нет ни того ни другого стема) — не конфликт.
 _SUBTYPE_PAIRS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
-    (frozenset({"кофемашин"}), frozenset({"кофеварк"})),
+    (frozenset({"кофемашин", "автомат"}), frozenset({"кофеварк", "капельн"})),
     (frozenset({"камер"}), frozenset({"ларь", "лари", "ларе"})),
+    (frozenset({"зернов"}), frozenset({"капсульн"})),
+    (frozenset({"встраиваем", "встроен"}), frozenset({"отдельностоящ"})),
+    (frozenset({"side-by-side", "side by side", "двухдвер"}), frozenset({"однокамер"})),
 )
+
+# Допуск по ширине при жёстком фильтре (мм): 60 см = 600, 59.5 см тоже ок.
+_WIDTH_TOLERANCE_MM = 10
+
+# Ключи атрибутов, по которым определяем подтип (тип/вид товара на карточке).
+_SUBTYPE_ATTR_KEY_SUBS = ("тип", "вид")
 
 
 def _has_stem(text: str, stems: frozenset[str]) -> bool:
     return any(s in text for s in stems)
 
 
-def _subtype_conflict(request_text: str, title: str) -> bool:
-    """Назван ли в запросе один подтип пары, а в названии — противоположный."""
+def _request_has_subtype_intent(request_text: str) -> bool:
     req = (request_text or "").lower()
-    low = (title or "").lower()
+    for a, b in _SUBTYPE_PAIRS:
+        if _has_stem(req, a) or _has_stem(req, b):
+            return True
+    return False
+
+
+def _product_subtype_text(product: CatalogProduct) -> str:
+    """Текст для определения подтипа: название + тип/вид из характеристик."""
+    parts = [product.title]
+    for k, v in (product.attributes or {}).items():
+        kl = k.lower()
+        if any(s in kl for s in _SUBTYPE_ATTR_KEY_SUBS):
+            parts.append(v)
+    return " ".join(parts).lower()
+
+
+def _subtype_conflict(request_text: str, product_text: str) -> bool:
+    """Назван ли в запросе один подтип пары, а у товара — противоположный."""
+    req = (request_text or "").lower()
+    low = (product_text or "").lower()
     for a, b in _SUBTYPE_PAIRS:
         for want, other in ((a, b), (b, a)):
             if (
@@ -107,6 +134,17 @@ def _subtype_conflict(request_text: str, title: str) -> bool:
             ):
                 return True
     return False
+
+
+def _subtype_ambiguous_from_title(product: CatalogProduct, request_text: str) -> bool:
+    """В запросе есть подтип, но в названии товара его не различить — нужна карточка."""
+    if not _request_has_subtype_intent(request_text):
+        return False
+    low = product.title.lower()
+    for a, b in _SUBTYPE_PAIRS:
+        if _has_stem(low, a) or _has_stem(low, b):
+            return False
+    return True
 
 
 def _canon_fuel(fuel: str) -> str:
@@ -327,6 +365,26 @@ class ProductSelector:
         """Публичная обёртка: применима для повторной валидации после обогащения."""
         return self._passes_filters(spec, product)
 
+    def needs_enrichment(self, spec: ProductSpec, product: CatalogProduct) -> bool:
+        """Нужно ли открыть карточку товара перед финальным решением.
+
+        Обогащаем, если запрошенная характеристика не подтверждена названием/кэшем
+        атрибутов — иначе подбор по «молчанию» пропускает неверный товар.
+        """
+        if spec.color and not self.color_confirmed_by_title(spec, product):
+            return True
+        if spec.width_mm and _product_width(product) is None:
+            return True
+        if spec.fuel_type and not _product_fuels(product):
+            return True
+        if spec.burners and _product_burners(product) is None:
+            return True
+        if spec.install_type and _product_install(product) is None:
+            return True
+        if spec.raw_text and _subtype_ambiguous_from_title(product, spec.raw_text):
+            return True
+        return False
+
     def color_confirmed_by_title(self, spec: ProductSpec, product: CatalogProduct) -> bool:
         """Подтверждает ли НАЗВАНИЕ товара совместимый с запросом цвет.
 
@@ -345,8 +403,8 @@ class ProductSelector:
 
     def _passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
         # Конфликт подтипов («кофемашина» vs кофеварка, «камера» vs ларь): клиент
-        # явно назвал подтип — противоположный в названии товара отсеиваем.
-        if spec.raw_text and _subtype_conflict(spec.raw_text, product.title):
+        # явно назвал подтип — противоположный в названии/атрибутах отсеиваем.
+        if spec.raw_text and _subtype_conflict(spec.raw_text, _product_subtype_text(product)):
             return False
 
         colors = _product_colors(product)
@@ -379,6 +437,12 @@ class ProductSelector:
             have = _product_install(product)
             if want and have and want != have:
                 return False
+        # Жёсткая ширина: если в карточке ширина известна и не попадает в допуск —
+        # отсекаем. Молчание (ширина не указана) — не конфликт.
+        if spec.width_mm:
+            w = _product_width(product)
+            if w is not None and abs(w - spec.width_mm) > _WIDTH_TOLERANCE_MM:
+                return False
         return True
 
     def _attr_signals(self, spec: ProductSpec, product: CatalogProduct) -> tuple[int, int]:
@@ -400,7 +464,7 @@ class ProductSelector:
         if spec.width_mm:
             requested += 1
             w = _product_width(product)
-            if w is not None and abs(w - spec.width_mm) <= 15:
+            if w is not None and abs(w - spec.width_mm) <= _WIDTH_TOLERANCE_MM:
                 matched += 1
         return matched, requested
 

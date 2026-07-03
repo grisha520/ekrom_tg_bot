@@ -125,3 +125,50 @@ def test_no_brand_keeps_segment_choice():
     _wm, _wb, tiers = Pipeline._build_tiers(spec, ranked)
     product, tier = asyncio.run(p._first_available(None, sel, spec, tiers, None))
     assert product.price == 50000  # медианный, а не самый дешёвый
+
+
+# ── Обогащение top-N перед финальным выбором ─────────────────────────────────
+
+class FakeEkrom:
+    """Подставка ekrom: «открывает» карточку, подставляя атрибуты по url."""
+
+    def __init__(self, by_url: dict[str, dict[str, str]]) -> None:
+        self.by_url = by_url
+        self.enriched: list[str] = []
+
+    async def ensure_enriched(self, product: CatalogProduct, page=None) -> None:
+        self.enriched.append(product.url)
+        product.attributes.update(self.by_url.get(product.url, {}))
+
+
+def test_enrichment_skips_wrong_product_picks_next():
+    # Дешёвый кандидат без признаков в названии — после обогащения не подходит;
+    # второй кандидат обогащается и выбирается.
+    p = Pipeline(Settings(LLM_PROVIDER="rule"))
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.OVEN, color="белый", width_mm=600)
+    wrong = _p("Духовка ABC", 100)
+    right = _p("Духовка XYZ", 150)
+    ekrom = FakeEkrom({
+        wrong.url: {"Цвет": "Чёрный", "Ширина, мм": "595"},
+        right.url: {"Цвет": "Белый", "Ширина, мм": "600"},
+    })
+    ranked = sel.ranked_candidates(spec, [wrong, right])
+    _wm, _wb, tiers = Pipeline._build_tiers(spec, ranked)
+    product, tier = asyncio.run(p._first_available(ekrom, sel, spec, tiers, None))
+    assert product.url == right.url
+    assert wrong.url in ekrom.enriched
+    assert right.url in ekrom.enriched
+
+
+def test_enrichment_not_needed_when_title_confirms():
+    p = Pipeline(Settings(LLM_PROVIDER="rule"))
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.OVEN, color="белый")
+    product = _p("Духовка белая", 100)
+    ekrom = FakeEkrom({})
+    ranked = sel.ranked_candidates(spec, [product])
+    _wm, _wb, tiers = Pipeline._build_tiers(spec, ranked)
+    picked, _tier = asyncio.run(p._first_available(ekrom, sel, spec, tiers, None))
+    assert picked.url == product.url
+    assert ekrom.enriched == []
