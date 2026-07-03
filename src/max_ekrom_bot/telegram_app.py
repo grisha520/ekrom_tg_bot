@@ -49,7 +49,6 @@ from .messenger.client_ux import (
     BTN_HISTORY,
     EXAMPLE_QUERIES,
     client_status_parse,
-    client_status_pdf,
     client_status_select,
     contacts_text,
     empty_result_text,
@@ -61,7 +60,6 @@ from .messenger.client_ux import (
     format_history_list,
     history_inline_keyboard,
     is_smalltalk,
-    pdf_caption,
     smalltalk_reply,
     TIER_PDF_LABELS,
     tier_keyboard,
@@ -756,31 +754,9 @@ async def _run_pick(
                         disable_web_page_preview=True,
                         reply_markup=tier_keyboard(token, "optimal"),
                     )
-                    await message.bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
-                    pdf_status = await message.answer(
-                        client_status_pdf(), parse_mode=ParseMode.HTML
-                    )
-                    try:
-                        pdf_path = await asyncio.to_thread(
-                            build_offer_pdf, selection, get_settings()
-                        )
-                        await message.answer_document(
-                            FSInputFile(pdf_path), caption=pdf_caption()
-                        )
-                        await pdf_status.delete()
-                        if uid is not None:
-                            _history().add(
-                                uid,
-                                text,
-                                pdf_path,
-                                total_price=selection.total_price,
-                                matched_count=matched_count,
-                            )
-                    except Exception:  # noqa: BLE001
-                        logger.exception("client offer pdf failed")
-                        await pdf_status.edit_text(
-                            "Подбор выше 👆 PDF не удалось собрать — менеджер пришлёт отдельно."
-                        )
+                    # PDF намеренно НЕ формируем автоматически: клиент сначала
+                    # выбирает ценовой уровень (табы), затем жмёт «📄 Скачать PDF
+                    # этого варианта» — меньше спама файлами и нагрузки.
                     s = get_settings()
                     await message.answer(
                         followup_text(s),
