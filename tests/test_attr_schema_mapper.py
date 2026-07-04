@@ -103,3 +103,30 @@ def test_mapper_drops_hallucinated_keys():
     llm = _FakeLLM('{"map": {"1": [{"attribute": "Придуманный атрибут", "op": "eq", "value": "X"}]}}')
     AttrMapper(llm=llm).map([(spec, schema)])
     assert spec.attr_constraints == []  # несуществующий ключ отброшен
+
+
+def test_sanity_drops_number_out_of_range():
+    # «производительность 1000» ошибочно привязана к «Уровень шума» (35–75 дБ) → drop.
+    schema = {"Уровень шума, дБ": {"type": "number", "min": 35, "max": 75}}
+    spec = ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="вытяжка от 1000 кубов")
+    llm = _FakeLLM('{"map": {"1": [{"attribute": "Уровень шума, дБ", "op": "gte", "value": "1000"}]}}')
+    AttrMapper(llm=llm).map([(spec, schema)])
+    assert spec.attr_constraints == []
+
+
+def test_sanity_softens_unknown_categorical_value():
+    # «Тип кофемолки»=«Да» не из известных значений → понижается до approx (сигнал).
+    schema = {"Тип кофемолки": {"type": "categorical", "values": ["Жерновая", "Ножевая"]}}
+    spec = ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="кофемашина с кофемолкой")
+    llm = _FakeLLM('{"map": {"1": [{"attribute": "Тип кофемолки", "op": "eq", "value": "Да"}]}}')
+    AttrMapper(llm=llm).map([(spec, schema)])
+    assert len(spec.attr_constraints) == 1
+    assert spec.attr_constraints[0].op == "approx"
+
+
+def test_sanity_keeps_valid_constraints():
+    schema = {"Уровень шума, дБ": {"type": "number", "min": 35, "max": 75}}
+    spec = ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="тихая до 45 дБ")
+    llm = _FakeLLM('{"map": {"1": [{"attribute": "Уровень шума, дБ", "op": "lte", "value": "45"}]}}')
+    AttrMapper(llm=llm).map([(spec, schema)])
+    assert [(c.op, c.value) for c in spec.attr_constraints] == [("lte", "45")]

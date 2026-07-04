@@ -11,11 +11,44 @@ from __future__ import annotations
 import json
 import logging
 
+import re
+
 from ..config import Settings, get_settings
 from ..llm import LLMProvider
 from ..models import AttrConstraint, ProductSpec
 
 logger = logging.getLogger(__name__)
+
+
+def _num(s: object) -> float | None:
+    m = re.search(r"-?\d+(?:[.,]\d+)?", str(s))
+    return float(m.group().replace(",", ".")) if m else None
+
+
+def _sanity_check(c: dict, info: dict) -> dict | None:
+    """Проверка ограничения по схеме атрибута — ловим ошибки привязки LLM.
+
+    - number: значение вне разумного диапазона атрибута (×2 от наблюдаемого) —
+      привязка неверная («производительность 1000» → «Уровень шума») → отбросить.
+    - categorical: значение не похоже ни на одно известное («Тип кофемолки»=«Да») →
+      понизить до approx-сигнала, чтобы жёсткий фильтр не отсёк всё.
+    """
+    t = info.get("type")
+    val = str(c.get("value") or "")
+    if t == "number":
+        rn = _num(val)
+        if rn is None:
+            return None
+        lo, hi = info.get("min"), info.get("max")
+        if lo is not None and hi is not None and not (lo / 2 - 1 <= rn <= hi * 2 + 1):
+            return None  # значение не из мира этого атрибута
+    elif t == "categorical":
+        known = [str(v).lower() for v in info.get("values", [])]
+        vl = val.lower().strip()
+        if known and not any(vl in k or k in vl for k in known):
+            c = dict(c)
+            c["op"] = "approx"  # незнакомое значение — только сигнал, не фильтр
+    return c
 
 _SYSTEM = """\
 Ты сопоставляешь запрос клиента с ХАРАКТЕРИСТИКАМИ товара. Для каждой ПОЗИЦИИ дан
@@ -116,8 +149,12 @@ class AttrMapper:
                 if not (isinstance(c, dict) and c.get("attribute") in valid_keys
                         and str(c.get("value") or "").strip()):
                     continue  # только реальные атрибуты категории с непустым значением
+                checked = _sanity_check(c, schema[c["attribute"]])
+                if checked is None:
+                    logger.info("маппер: ограничение отброшено sanity-check: %s", c)
+                    continue
                 try:
-                    constraints.append(AttrConstraint(**c))
+                    constraints.append(AttrConstraint(**checked))
                 except Exception:  # noqa: BLE001 — кривой элемент пропускаем
                     continue
             if constraints:
