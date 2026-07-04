@@ -178,7 +178,7 @@ class Pipeline:
     def _spec_category_path(self, spec) -> str | None:
         return category_for(spec.appliance) or spec.category_url
 
-    def _map_attributes(self, specs) -> None:
+    def _map_attributes(self, specs, original_message: str = "") -> None:
         """Привязать характеристики запроса к реальным атрибутам категории (LLM
         со схемой из кэша). Требует включённого кэша каталога; без него — no-op,
         остаётся свободный extra как запасной механизм."""
@@ -193,7 +193,7 @@ class Pipeline:
             schema = get_category_schema(cache, cat) if cat else {}
             items.append((spec, schema))
         try:
-            self._get_attr_mapper().map(items)
+            self._get_attr_mapper().map(items, original_message=original_message)
         except Exception:  # noqa: BLE001 — маппер не критичен
             logger.warning("схемо-маппер не удался", exc_info=True)
 
@@ -210,7 +210,7 @@ class Pipeline:
                 self._get_resolver().resolve(request.specs)
             except Exception:  # noqa: BLE001 — выбор категории не критичен
                 logger.warning("выбор категории не удался", exc_info=True)
-        self._map_attributes(request.specs)
+        self._map_attributes(request.specs, original_message=request.original_message)
         return request
 
     async def select_products(

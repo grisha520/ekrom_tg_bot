@@ -75,21 +75,32 @@ class AttrMapper:
             )
         return self._llm
 
-    def map(self, items: list[tuple[ProductSpec, dict]]) -> None:
+    def map(self, items: list[tuple[ProductSpec, dict]], original_message: str = "") -> None:
         """Заполнить attr_constraints у позиций (items = [(spec, schema)]).
 
         Один вызов LLM на все позиции со схемой. Ошибки не критичны (остаётся
-        свободный extra как запасной механизм сопоставления)."""
+        свободный extra как запасной механизм сопоставления).
+
+        original_message — полный запрос клиента: парсер часто обрезает raw_text до
+        «стиральная машина», теряя характеристики; для ОДНОЙ позиции берём полный
+        текст, для нескольких — raw_text каждой (+ полный запрос как контекст)."""
         indexed = [(i, s, sch) for i, (s, sch) in enumerate(items, 1) if sch]
         if not indexed:
             return
+        single = len(indexed) == 1
         blocks = []
         for i, spec, schema in indexed:
+            text = original_message if (single and original_message) else (
+                spec.raw_text or spec.appliance.value)
             blocks.append(
-                f"ПОЗИЦИЯ {i}: {spec.raw_text or spec.appliance.value}\n"
+                f"ПОЗИЦИЯ {i}: {text}\n"
                 f"Атрибуты категории:\n{_schema_lines(schema)}"
             )
-        user = "\n\n".join(blocks)
+        prefix = (
+            f"Полный запрос клиента: {original_message}\n\n"
+            if original_message and not single else ""
+        )
+        user = prefix + "\n\n".join(blocks)
         try:
             raw = self._get_llm().complete_json(_SYSTEM, user)
             mapping = json.loads(raw).get("map", {})
