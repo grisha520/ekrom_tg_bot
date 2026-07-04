@@ -17,10 +17,11 @@ import json
 from max_ekrom_bot.config import REPO_ROOT, get_settings
 from max_ekrom_bot.ekrom.client import EkromClient
 
-# Только разделы реальной техники (без аксессуаров/акций/дисконта/сравнения/
-# комплектов/сантехники).
+# Разделы реальной техники + сантехника для кухни (мойки, смесители — их часто
+# спрашивают клиенты). Без аксессуаров/акций/дисконта/сравнения/комплектов.
 INCLUDE_PREFIXES = (
     "/catalog/tekhnika_dlya_kukhni/",
+    "/catalog/santekhnika_dlya_kukhni/",
     "/catalog/tekhnika_dlya_doma/",
     "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/",
     "/catalog/klimaticheskaya_tekhnika/",
