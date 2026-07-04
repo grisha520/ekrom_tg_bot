@@ -307,3 +307,15 @@ def test_subtype_conflict_from_attributes():
     )
     assert len(ranked) == 1
     assert ranked[0].url == "u/machine"
+
+
+def test_ivory_cream_not_matched_as_white():
+    # «Слоновая кость»/IVORY — кремовый (семья бежевого), под «белый» не подходит.
+    sel = ProductSelector(segment="средний")
+    spec = ProductSpec(appliance=ApplianceType.HOOD, color="белый")
+    ivory = CatalogProduct(title="Вытяжка Lex HUBBLE 500 IVORY", url="u1", price=100,
+                           attributes={"Цвет": "Слоновая кость"})
+    white = CatalogProduct(title="Вытяжка Lex SIMPLE 600 WHITE", url="u2", price=120,
+                           attributes={"Цвет": "Белый"})
+    ranked = sel.ranked_candidates(spec, [ivory, white])
+    assert [c.title for c in ranked] == ["Вытяжка Lex SIMPLE 600 WHITE"]
