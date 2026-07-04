@@ -1,5 +1,155 @@
 [
   {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_domashnej_tekhniki/",
+    "name": "Аксессуары для домашней техники",
+    "path": "Аксессуары"
+  },
+  {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_domashnej_tekhniki/aksessuary_dlya_televizorov/",
+    "name": "Аксессуары для телевизоров",
+    "path": "Аксессуары / Аксессуары для домашней техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_domashnej_tekhniki/aksessuary_dlya_vozdukhoochistiteley/",
+    "name": "Аксессуары для воздухоочистителей",
+    "path": "Аксессуары / Аксессуары для домашней техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_kuhonnoj_santekhniki/",
+    "name": "Аксессуары для кухонной сантехники",
+    "path": "Аксессуары"
+  },
+  {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_kuhonnoj_santekhniki/aksessuary_dlya_izmelchiteley/",
+    "name": "Аксессуары для измельчителей",
+    "path": "Аксессуары / Аксессуары для кухонной сантехники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_kuhonnoj_santekhniki/aksessuary_dlya_kukhonnykh_moek/",
+    "name": "Аксессуары для кухонных моек",
+    "path": "Аксессуары / Аксессуары для кухонной сантехники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/Aksessuary_dlya_kuhonnoj_santekhniki/aksessuary_dlya_smesiteley/",
+    "name": "Аксессуары для смесителей",
+    "path": "Аксессуары / Аксессуары для кухонной сантехники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/",
+    "name": "Аксессуары для кухонной техники",
+    "path": "Аксессуары"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_dukhovykh_shkafov/",
+    "name": "Аксессуары для духовых шкафов",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_kholodilnikov/",
+    "name": "Аксессуары для холодильников",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_kofemashin/",
+    "name": "Аксессуары для кофемашин",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_kukhonnykh_plit/",
+    "name": "Аксессуары для кухонных плит",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_mikrovolnovykh_pechey/",
+    "name": "Аксессуары для микроволновых печей",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_podogrevateley_posudy/",
+    "name": "Аксессуары для подогревателей посуды",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_posudomoechnykh_mashin/",
+    "name": "Аксессуары для посудомоечных машин",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_tseniteley_vina/",
+    "name": "Аксессуары для ценителей вина",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_varochnykh_paneley/",
+    "name": "Аксессуары для варочных панелей",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/aksessuary_dlya_vytyazhek/",
+    "name": "Аксессуары для вытяжек",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/prochee_1/",
+    "name": "Прочее",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_kuhonnoj_tekhniki/vydvizhnye_yashchiki/",
+    "name": "Выдвижные ящики",
+    "path": "Аксессуары / Аксессуары для кухонной техники"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_dlya_vanny/",
+    "name": "Аксессуары для ванны",
+    "path": "Аксессуары"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/",
+    "name": "Аксессуары для ухода за одеждой",
+    "path": "Аксессуары"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/aksessuary_dlya_glazhki/",
+    "name": "Аксессуары для глажки",
+    "path": "Аксессуары / Аксессуары для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/gladilnye_doski/",
+    "name": "Гладильные доски",
+    "path": "Аксессуары / Аксессуары для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/prochee_aksessuary_dlya_uhoda_za_odezhdoj/",
+    "name": "Прочее",
+    "path": "Аксессуары / Аксессуары для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/soedinitelnye_elementy/",
+    "name": "Соединительные элементы",
+    "path": "Аксессуары / Аксессуары для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/sredstva_dlya_stirki/",
+    "name": "Средства для стирки",
+    "path": "Аксессуары / Аксессуары для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/aksessuary_main/aksessuary_home/vydvizhnye_polki_i_yashchiki/",
+    "name": "Выдвижные полки и ящики",
+    "path": "Аксессуары / Аксессуары для ухода за одеждой"
+  },
+  {
+    "url": "/catalog/aksessuary_main/prochee_2/",
+    "name": "Прочее",
+    "path": "Аксессуары"
+  },
+  {
+    "url": "/catalog/aksessuary_main/prochee_2/posuda/",
+    "name": "Посуда",
+    "path": "Аксессуары / Прочее"
+  },
+  {
     "url": "/catalog/klimaticheskaya_tekhnika/obogrevateli/",
     "name": "Обогреватели",
     "path": "Климатическая техника"
@@ -168,6 +318,26 @@
     "url": "/catalog/santekhnika_dlya_kukhni/vodoochistiteli/",
     "name": "Фильтры для воды",
     "path": "Сантехника для кухни"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_vanny/dushevye_sistemy/",
+    "name": "Душевые системы",
+    "path": "Сантехника для ванны"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_vanny/poddony_dlya_dushevoy_kabiny/",
+    "name": "Поддоны для душевой кабины",
+    "path": "Сантехника для ванны"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_vanny/rakoviny_dlya_vanny/",
+    "name": "Раковины для ванны",
+    "path": "Сантехника для ванны"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_vanny/smesiteli_dlya_vanny/",
+    "name": "Смесители для ванны",
+    "path": "Сантехника для ванны"
   },
   {
     "url": "/catalog/tekhnika_dlya_doma/kulery_dlya_vody/",
