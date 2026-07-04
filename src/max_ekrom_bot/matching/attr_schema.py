@@ -12,8 +12,15 @@ import re
 from collections import Counter, defaultdict
 
 _MIN_COUNT = 5        # атрибут должен встречаться хотя бы у стольких товаров
-_TOP_ATTRS = 30       # сколько атрибутов держим в схеме (по частоте)
+_TOP_ATTRS = 26       # сколько атрибутов держим в схеме (по частоте)
 _TOP_VALUES = 15      # сколько значений категориального атрибута показываем
+
+# Нехарактеристики: служебное/идентификаторы — не предлагаем мапперу (шум в
+# промпте сбивает LLM). Цвет/бренд/цена/установка разбираются отдельными полями.
+_SKIP_KEY_SUBSTR = (
+    "артикул", "модель", "производит", "страна", "гарант", "остаток", "промо",
+    "штрих", "серия", "вес,", "код товара", "цвет", "бренд", "цена",
+)
 
 
 def _num(s: object) -> float | None:
@@ -34,7 +41,7 @@ def build_category_schema(products) -> dict[str, dict]:
 
     for p in products:
         for k, v in (p.attributes or {}).items():
-            if not v:
+            if not v or any(s in k.lower() for s in _SKIP_KEY_SUBSTR):
                 continue
             key_count[k] += 1
             values[k][v] += 1
