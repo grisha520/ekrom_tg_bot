@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _PER_PAGE_LIMIT = 500   # все карточки страницы (реально на странице ~21)
 _MAX_PAGES = 80         # предохранитель от рантового обхода
 _PAGE_CONCURRENCY = 4   # сколько страниц грузим параллельно (на 2 ядра/4ГБ ок)
-_ENRICH_CONCURRENCY = 4  # сколько карточек товаров обогащаем параллельно
+_ENRICH_CONCURRENCY = 6  # карточки лёгкие (block_heavy) — можно больше параллели
 
 
 async def _read_max_page(page) -> int:
@@ -105,10 +105,11 @@ async def _enrich_missing(
 
     async def one(url: str) -> bool:
         async with sem:
-            pg = await ek.new_page()
+            # block_heavy: не грузим картинки/стили — характеристики в HTML, а
+            # фото берём как src (файл скачивать не нужно). Ускоряет в разы.
+            pg = await ek.new_page(block_heavy=True)
             try:
                 await pg.goto(url, wait_until="domcontentloaded")
-                await pg.wait_for_timeout(400)
                 props = await ek.read_product_properties(pg)
                 img = await ek.read_product_image(pg)
                 if props or img:
