@@ -279,6 +279,108 @@ def _attr_get(product: CatalogProduct, *key_subs: str) -> str | None:
     return None
 
 
+# ── Материал (мойки, поверхности) — жёсткий фильтр как цвет ───────────────────
+_MATERIAL_TOKENS: dict[str, set[str]] = {
+    "нержавейка": {"нержав", "инокс"},
+    "камень": {"камен", "гранит", "кварц", "мрамор", "агломерат"},
+    "керамика": {"керамик", "фарфор"},
+    "стекло": {"стекл"},
+    "эмаль": {"эмал"},
+    "композит": {"композит"},
+    "пластик": {"пластик"},
+}
+
+
+def _canon_material(s: str | None) -> str | None:
+    low = (s or "").lower()
+    for canon, toks in _MATERIAL_TOKENS.items():
+        if any(t in low for t in toks):
+            return canon
+    return low.strip() or None
+
+
+def _product_material(product: CatalogProduct) -> str | None:
+    val = _attr_get(product, "материал")
+    return _canon_material(val) if val else None
+
+
+# ── Класс энергопотребления (порядковый: A+++ лучше G) ────────────────────────
+_ENERGY_ORDER = ("A+++", "A++", "A+", "A", "B", "C", "D", "E", "F", "G")
+
+
+def _canon_energy(s: str | None) -> str | None:
+    if not s:
+        return None
+    t = str(s).upper().split("/")[0].strip()
+    t = t.translate(str.maketrans("АВСЕ", "ABCE"))  # кириллица → латиница
+    m = re.match(r"[A-G]\+*", t)
+    return m.group() if m else None
+
+
+def _energy_rank(s: str | None) -> int | None:
+    c = _canon_energy(s)
+    return _ENERGY_ORDER.index(c) if c in _ENERGY_ORDER else None
+
+
+def _num(s: object) -> float | None:
+    m = re.search(r"\d+(?:[.,]\d+)?", str(s))
+    return float(m.group().replace(",", ".")) if m else None
+
+
+def _product_volume(product: CatalogProduct) -> int | None:
+    val = _attr_get(product, "объ")  # «Общий/полезный объем, л», «Объем, л»
+    n = _num(val) if val else None
+    return int(n) if n is not None else None
+
+
+def _product_load(product: CatalogProduct) -> float | None:
+    val = _attr_get(product, "загруз")  # «Max загрузка белья, кг»
+    return _num(val) if val else None
+
+
+def _product_energy(product: CatalogProduct) -> str | None:
+    return _attr_get(product, "класс энерг")  # «Класс энергопотребления»
+
+
+# ── Универсальное сопоставление ЛЮБОЙ характеристики (spec.extra) ─────────────
+def _find_attr_value(product: CatalogProduct, name: str) -> str | None:
+    """Значение атрибута товара, ключ которого лучше всего соответствует `name`.
+
+    Клиент называет характеристику своими словами («отжим», «камер», «программ»),
+    а у товара ключ полнее («Скорость отжима, оборотов/мин»). Сначала прямое
+    вхождение подстроки, затем — совпадение по токенам.
+    """
+    attrs = product.attributes or {}
+    nlow = name.lower().strip()
+    if not nlow:
+        return None
+    for k, v in attrs.items():
+        if nlow in k.lower():
+            return v
+    ntoks = {t for t in re.split(r"[^а-яёa-z0-9]+", nlow) if len(t) >= 3}
+    if not ntoks:
+        return None
+    best, best_score = None, 0
+    for k, v in attrs.items():
+        ktoks = set(re.split(r"[^а-яёa-z0-9]+", k.lower()))
+        score = len(ntoks & ktoks)
+        if score > best_score:
+            best, best_score = v, score
+    return best if best_score else None
+
+
+def _value_matches(requested: str, product_val: str) -> bool:
+    """Совпадает ли желаемое значение характеристики с фактическим у товара.
+
+    Числа — с допуском ±15%; иначе — вхождение подстроки (регистр не важен).
+    """
+    rn, pn = _num(requested), _num(product_val)
+    if rn is not None and pn is not None:
+        return abs(pn - rn) <= max(rn * 0.15, 0.5)
+    r, p = str(requested).lower().strip(), str(product_val).lower()
+    return bool(r) and (r in p or p in r)
+
+
 def _product_colors(product: CatalogProduct) -> set[str]:
     text = product.title
     cval = _attr_get(product, "цвет")
@@ -443,6 +545,12 @@ class ProductSelector:
             w = _product_width(product)
             if w is not None and abs(w - spec.width_mm) > _WIDTH_TOLERANCE_MM:
                 return False
+        # Материал (мойка из камня / нержавейки): явное противоречие — отсекаем.
+        if spec.material:
+            want_mat = _canon_material(spec.material)
+            have_mat = _product_material(product)
+            if want_mat and have_mat and want_mat != have_mat:
+                return False
         return True
 
     def _attr_signals(self, spec: ProductSpec, product: CatalogProduct) -> tuple[int, int]:
@@ -465,6 +573,35 @@ class ProductSelector:
             requested += 1
             w = _product_width(product)
             if w is not None and abs(w - spec.width_mm) <= _WIDTH_TOLERANCE_MM:
+                matched += 1
+        if spec.volume_l:
+            requested += 1
+            v = _product_volume(product)
+            if v is not None and abs(v - spec.volume_l) <= max(spec.volume_l * 0.15, 10):
+                matched += 1
+        if spec.load_kg:
+            requested += 1
+            ld = _product_load(product)
+            if ld is not None and abs(ld - spec.load_kg) <= 1.0:
+                matched += 1
+        if spec.energy_class:
+            want_rank = _energy_rank(spec.energy_class)
+            if want_rank is not None:
+                requested += 1
+                pr = _energy_rank(_product_energy(product))
+                if pr is not None and pr <= want_rank:  # класс равен или лучше
+                    matched += 1
+        if spec.material:
+            requested += 1
+            if _product_material(product) == _canon_material(spec.material):
+                matched += 1
+        # Универсально — любые прочие характеристики из запроса (spec.extra).
+        for name, value in (spec.extra or {}).items():
+            if not value:
+                continue
+            requested += 1
+            pv = _find_attr_value(product, name)
+            if pv is not None and _value_matches(value, pv):
                 matched += 1
         return matched, requested
 

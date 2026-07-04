@@ -49,6 +49,12 @@ class ProductSpec(BaseModel):
     fuel_type: Optional[str] = Field(default=None, description="Электрическая / газовая / индукционная")
     burners: Optional[int] = Field(default=None, description="Количество конфорок (для варочных)")
 
+    # Расширенные характеристики для точного подбора.
+    volume_l: Optional[int] = Field(default=None, description="Объём, л (холодильник/морозилка/винный шкаф)")
+    load_kg: Optional[float] = Field(default=None, description="Загрузка, кг (стиральная/сушильная машина)")
+    energy_class: Optional[str] = Field(default=None, description="Класс энергопотребления: A+++/A++/A+/A/B…")
+    material: Optional[str] = Field(default=None, description="Материал: нержавейка/камень/керамика/стекло…")
+
     # Ценовой потолок клиента, ₽ («до 30000», «не дороже 25 тыс»). Если задан —
     # подбор не превышает его (при наличии вариантов в бюджете).
     max_price: Optional[int] = Field(default=None, description="Максимальная цена, ₽")
@@ -72,7 +78,7 @@ class ProductSpec(BaseModel):
     # сломает каскад замен, а цвет="null" — фильтрацию по цвету.
     @field_validator(
         "color", "fuel_type", "install_type", "brand", "model",
-        "category_url", "category_name", mode="before",
+        "category_url", "category_name", "energy_class", "material", mode="before",
     )
     @classmethod
     def _blank_to_none(cls, v: object) -> object:
@@ -80,10 +86,10 @@ class ProductSpec(BaseModel):
             return None
         return v
 
-    @field_validator("max_price", mode="before")
+    @field_validator("max_price", "volume_l", mode="before")
     @classmethod
-    def _coerce_price(cls, v: object) -> object:
-        # LLM может прислать «30000», «30 000», «30000 руб» или число — берём цифры.
+    def _coerce_int(cls, v: object) -> object:
+        # LLM может прислать «30000», «300 л», число — берём цифры.
         if v is None or v == "":
             return None
         if isinstance(v, bool):  # bool — подкласс int, отсекаем явно
@@ -93,6 +99,21 @@ class ProductSpec(BaseModel):
         if isinstance(v, str):
             digits = re.sub(r"[^\d]", "", v)
             return int(digits) if digits else None
+        return None
+
+    @field_validator("load_kg", mode="before")
+    @classmethod
+    def _coerce_float(cls, v: object) -> object:
+        # «8 кг», «8.5», «7,5» → float.
+        if v is None or v == "":
+            return None
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            m = re.search(r"\d+(?:[.,]\d+)?", v)
+            return float(m.group().replace(",", ".")) if m else None
         return None
 
     @field_validator("extra", mode="before")
