@@ -140,6 +140,36 @@
     "path": "МБТ"
   },
   {
+    "url": "/catalog/santekhnika_dlya_kukhni/izmelchiteli_pishchevykh_otkhodov/",
+    "name": "Измельчители пищевых отходов",
+    "path": "Сантехника для кухни"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_kukhni/moyki/",
+    "name": "Мойки",
+    "path": "Сантехника для кухни"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_kukhni/moyki/moyki_iz_kamnya/",
+    "name": "Мойки из камня",
+    "path": "Сантехника для кухни / Мойки"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_kukhni/moyki/moyki_iz_nerzhaveyki/",
+    "name": "Мойки из нержавейки",
+    "path": "Сантехника для кухни / Мойки"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_kukhni/smesiteli/",
+    "name": "Смесители",
+    "path": "Сантехника для кухни"
+  },
+  {
+    "url": "/catalog/santekhnika_dlya_kukhni/vodoochistiteli/",
+    "name": "Фильтры для воды",
+    "path": "Сантехника для кухни"
+  },
+  {
     "url": "/catalog/tekhnika_dlya_doma/kulery_dlya_vody/",
     "name": "Кулеры для воды",
     "path": "Техника для дома"
