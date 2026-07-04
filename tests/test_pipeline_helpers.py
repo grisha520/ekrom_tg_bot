@@ -45,3 +45,67 @@ def test_parse_price_strips_non_digits():
     assert _parse_price("45 990 ₽") == 45990.0
     assert _parse_price("") is None
     assert _parse_price("—") is None
+
+
+def test_burners_query_prefers_smart_filter_over_cache():
+    """При заданных конфорках кандидаты берутся из смарт-фильтра, не из кэша."""
+    import asyncio
+
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
+    from max_ekrom_bot.pipeline import Pipeline
+
+    class _FakeCache:
+        def category_age(self, key):
+            return 1.0
+
+        def query_category(self, key):
+            return [CatalogProduct(title="ИЗ КЭША", url="c")]
+
+    class _FakeEkrom:
+        def __init__(self):
+            self.browsed = []
+
+        async def browse_url(self, url, page=None):
+            self.browsed.append(url)
+            return [CatalogProduct(title="ИЗ СМАРТ-ФИЛЬТРА", url="s", price=100)]
+
+        async def browse_category(self, path, page=None):
+            return []
+
+        async def search(self, q, page=None):
+            return []
+
+    p = Pipeline(Settings(LLM_PROVIDER="rule", USE_CATALOG_CACHE="true"))
+    p._cache = _FakeCache()
+    ek = _FakeEkrom()
+    spec = ProductSpec(appliance=ApplianceType.COOKTOP, fuel_type="индукционная", burners=2)
+    cands = asyncio.run(p._candidates_for_spec(ek, spec))
+    assert [c.title for c in cands] == ["ИЗ СМАРТ-ФИЛЬТРА"]
+    assert ek.browsed and "arrFilter_1762" in ek.browsed[0]  # фильтр по конфоркам
+
+
+def test_no_burners_uses_cache():
+    """Без конфорок — кандидаты из кэша (смарт-фильтр не трогаем)."""
+    import asyncio
+
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
+    from max_ekrom_bot.pipeline import Pipeline
+
+    class _FakeCache:
+        def category_age(self, key):
+            return 1.0
+
+        def query_category(self, key):
+            return [CatalogProduct(title="ИЗ КЭША", url="c", price=100)]
+
+    class _FakeEkrom:
+        async def browse_url(self, url, page=None):
+            raise AssertionError("не должны ходить в браузер при живом кэше")
+
+    p = Pipeline(Settings(LLM_PROVIDER="rule", USE_CATALOG_CACHE="true"))
+    p._cache = _FakeCache()
+    spec = ProductSpec(appliance=ApplianceType.COOKTOP, fuel_type="индукционная")
+    cands = asyncio.run(p._candidates_for_spec(_FakeEkrom(), spec))
+    assert [c.title for c in cands] == ["ИЗ КЭША"]

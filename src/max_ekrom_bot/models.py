@@ -134,6 +134,15 @@ class CustomerRequest(BaseModel):
     def _none_to_empty_list(cls, v: object) -> object:
         return [] if v is None else v
 
+    @field_validator("segment", "notes", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v: object) -> object:
+        # YandexGPT иногда шлёт строку "null" вместо JSON null — иначе сегмент
+        # "null" просачивается в обоснование («Выбран «null» вариант»).
+        if isinstance(v, str) and v.strip().lower() in {"", "null", "none", "-"}:
+            return None
+        return v
+
 
 class CatalogProduct(BaseModel):
     """Товар из каталога ekrom (результат поиска)."""

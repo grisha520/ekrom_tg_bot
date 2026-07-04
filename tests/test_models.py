@@ -72,3 +72,10 @@ def test_selection_result_partitions_and_total():
     assert len(result.matched) == 2
     assert len(result.unmatched) == 1
     assert result.total_price == 100
+
+
+def test_segment_null_string_coerced_to_none():
+    req = CustomerRequest.model_validate({"specs": [], "segment": "null", "notes": "none"})
+    assert req.segment is None
+    assert req.notes is None
+    assert CustomerRequest.model_validate({"specs": [], "segment": "премиум"}).segment == "премиум"

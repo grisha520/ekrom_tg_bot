@@ -489,7 +489,12 @@ class Pipeline:
         # (резолвер). Краулер наполняет обе группы.
         cache = self._get_cache()
         cache_key = cat_path or spec.category_url
-        if cache and cache_key:
+        # Число конфорок кэш надёжно не отдаёт: у большинства карточек нет
+        # атрибутов, а в названии счётчика нет — редкие значения (1 конфорка)
+        # теряются, частые попадают неверно. Для запросов с конфорками берём
+        # кандидатов из смарт-фильтра сайта (он фильтрует по конфоркам напрямую).
+        prefer_smart_filter = bool(spec.burners and filtered_url)
+        if cache and cache_key and not prefer_smart_filter:
             age = cache.category_age(cache_key)
             if age is not None and age < self._settings.catalog_cache_ttl:
                 candidates = cache.query_category(cache_key)
