@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import json
 import logging
 import re
 
@@ -29,11 +30,30 @@ _PER_PAGE_LIMIT = 500   # все карточки страницы (реальн
 _MAX_PAGES = 80         # предохранитель от рантового обхода
 _PAGE_CONCURRENCY = 4   # сколько страниц грузим параллельно (на 2 ядра/4ГБ ок)
 # Обогащение характеристик — через httpx (без браузера): страницы ekrom рендерятся
-# на сервере, характеристики уже в HTML. httpx лёгкий → много параллельных
-# соединений без нагрузки на CPU (в отличие от Chromium). Умеренная параллель —
-# чтобы не долбить сайт ekrom.
-_ENRICH_HTTP_CONCURRENCY = 15
-_ENRICH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; ekrom-catalog-bot/1.0)"}
+# на сервере, характеристики уже в HTML. httpx лёгкий, но ekrom анти-ботит бурст —
+# держим параллель умеренной и шлём браузерные заголовки + куки сессии, иначе 403.
+_ENRICH_HTTP_CONCURRENCY = 5
+_ENRICH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9",
+}
+
+
+def _ekrom_cookies(settings: Settings) -> dict[str, str]:
+    """Куки сессии ekrom из storage_state — httpx без них ловит 403 от анти-бота."""
+    try:
+        st = json.loads(settings.storage_state_path.read_text(encoding="utf-8"))
+        return {
+            c["name"]: c["value"]
+            for c in st.get("cookies", [])
+            if "ekrom" in (c.get("domain") or "")
+        }
+    except Exception:  # noqa: BLE001 — нет сессии → пробуем без куки
+        return {}
 _RE_PROP_NAME = re.compile(r"product-info__property-name[^>]*>(.*?)</", re.S)
 _RE_PROP_VALUE = re.compile(r"product-info__property-value[^>]*>(.*?)</", re.S)
 _RE_TAG = re.compile(r"<[^>]+>")
@@ -130,7 +150,8 @@ async def _enrich_missing(
     done = 0
 
     async with httpx.AsyncClient(
-        timeout=25.0, follow_redirects=True, headers=_ENRICH_HEADERS
+        timeout=25.0, follow_redirects=True, headers=_ENRICH_HEADERS,
+        cookies=_ekrom_cookies(settings),
     ) as client:
 
         async def one(url: str) -> bool:
