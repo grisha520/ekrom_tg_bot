@@ -12,7 +12,11 @@
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import logging
+import re
+
+import httpx
 
 from ..config import Settings, get_settings
 from .catalog import CATEGORY_URLS
@@ -24,7 +28,28 @@ logger = logging.getLogger(__name__)
 _PER_PAGE_LIMIT = 500   # все карточки страницы (реально на странице ~21)
 _MAX_PAGES = 80         # предохранитель от рантового обхода
 _PAGE_CONCURRENCY = 4   # сколько страниц грузим параллельно (на 2 ядра/4ГБ ок)
-_ENRICH_CONCURRENCY = 6  # карточки лёгкие (block_heavy) — можно больше параллели
+# Обогащение характеристик — через httpx (без браузера): страницы ekrom рендерятся
+# на сервере, характеристики уже в HTML. httpx лёгкий → много параллельных
+# соединений без нагрузки на CPU (в отличие от Chromium). Умеренная параллель —
+# чтобы не долбить сайт ekrom.
+_ENRICH_HTTP_CONCURRENCY = 15
+_ENRICH_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; ekrom-catalog-bot/1.0)"}
+_RE_PROP_NAME = re.compile(r"product-info__property-name[^>]*>(.*?)</", re.S)
+_RE_PROP_VALUE = re.compile(r"product-info__property-value[^>]*>(.*?)</", re.S)
+_RE_TAG = re.compile(r"<[^>]+>")
+
+
+def _parse_attributes(html_text: str) -> dict[str, str]:
+    """Достать пары характеристик из сырого HTML карточки товара ekrom."""
+    names = _RE_PROP_NAME.findall(html_text)
+    values = _RE_PROP_VALUE.findall(html_text)
+    attrs: dict[str, str] = {}
+    for name, val in zip(names, values):
+        n = _html.unescape(_RE_TAG.sub("", name)).strip()
+        v = _html.unescape(_RE_TAG.sub("", val)).replace("\n", " ").strip()
+        if n and v and n not in attrs:
+            attrs[n] = v
+    return attrs
 
 
 async def _read_max_page(page) -> int:
@@ -86,12 +111,13 @@ def _all_category_paths() -> list[str]:
 
 
 async def _enrich_missing(
-    ek: EkromClient, cache: CatalogCache, limit: int | None = None
+    settings: Settings, cache: CatalogCache, limit: int | None = None
 ) -> tuple[int, int]:
-    """Дочитать характеристики+фото для товаров, у которых их ещё нет.
+    """Дочитать характеристики для товаров без них — через httpx (без браузера).
 
-    Возвращает (обогащено, всего_кандидатов). Инкрементально: берём только
-    товары без характеристик, поэтому повторные прогоны дешёвые.
+    Возвращает (обогащено, всего). Инкрементально: берём только товары без
+    характеристик. Фото тут НЕ трогаем — оно проставляется в подборе (Playwright,
+    выбор по размеру) для выбранного товара; здесь важен полный набор характеристик.
     """
     urls = cache.urls_without_attributes()
     if limit is not None:
@@ -99,34 +125,35 @@ async def _enrich_missing(
     total = len(urls)
     if not total:
         return 0, 0
-    logger.info("обогащение: товаров без характеристик — %s", total)
-    sem = asyncio.Semaphore(_ENRICH_CONCURRENCY)
+    logger.info("обогащение (http): товаров без характеристик — %s", total)
+    sem = asyncio.Semaphore(_ENRICH_HTTP_CONCURRENCY)
     done = 0
 
-    async def one(url: str) -> bool:
-        async with sem:
-            # block_heavy: не грузим картинки/стили — характеристики в HTML, а
-            # фото берём как src (файл скачивать не нужно). Ускоряет в разы.
-            pg = await ek.new_page(block_heavy=True)
-            try:
-                await pg.goto(url, wait_until="domcontentloaded")
-                props = await ek.read_product_properties(pg)
-                img = await ek.read_product_image(pg)
-                if props or img:
-                    cache.update_enrichment(url, props, img)
-                return bool(props)
-            except Exception:  # noqa: BLE001 — один товар не валит обогащение
-                return False
-            finally:
-                await pg.close()
+    async with httpx.AsyncClient(
+        timeout=25.0, follow_redirects=True, headers=_ENRICH_HEADERS
+    ) as client:
 
-    # Прогресс порциями, чтобы в логах было видно движение на длинном прогоне.
-    chunk = 200
-    for i in range(0, total, chunk):
-        batch = urls[i : i + chunk]
-        res = await asyncio.gather(*(one(u) for u in batch))
-        done += sum(res)
-        logger.info("обогащение: %s / %s (успешно %s)", min(i + chunk, total), total, done)
+        async def one(url: str) -> bool:
+            async with sem:
+                try:
+                    r = await client.get(url)
+                    if r.status_code != 200:
+                        return False
+                    attrs = _parse_attributes(r.text)
+                    if attrs:
+                        cache.update_enrichment(url, attrs, None)
+                        return True
+                except Exception:  # noqa: BLE001 — один товар не валит обогащение
+                    return False
+                return False
+
+        chunk = 300
+        for i in range(0, total, chunk):
+            res = await asyncio.gather(*(one(u) for u in urls[i : i + chunk]))
+            done += sum(res)
+            logger.info(
+                "обогащение: %s / %s (успешно %s)", min(i + chunk, total), total, done
+            )
     return done, total
 
 
@@ -135,7 +162,7 @@ async def crawl(
 ) -> dict[str, int]:
     """Наполнить кэш каталога (все категории, все страницы) и обогатить товары.
 
-    enrich=True — дочитать характеристики+фото у товаров без них (инкрементально).
+    enrich=True — дочитать характеристики у товаров без них (инкрементально, httpx).
     enrich_limit — ограничить число обогащаемых за прогон (для дробления нагрузки).
     """
     settings = settings or get_settings()
@@ -154,6 +181,7 @@ async def crawl(
             n = cache.upsert_many(products, path) if products else 0
             results[path] = n
             logger.info("категория %s: %s товаров", path, n)
-        if enrich:
-            await _enrich_missing(ek, cache, limit=enrich_limit)
+    # Обогащение — вне браузера (httpx), после сбора листингов.
+    if enrich:
+        await _enrich_missing(settings, cache, limit=enrich_limit)
     return results

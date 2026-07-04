@@ -193,27 +193,12 @@ class EkromClient:
             raise RuntimeError("EkromClient не запущен — вызовите start()/используйте 'async with'")
         return self._page
 
-    async def new_page(self, block_heavy: bool = False) -> Page:
-        """Создать дополнительную вкладку (для параллельной обработки позиций).
-
-        block_heavy=True — не грузить картинки/стили/шрифты/медиа. Для краула
-        характеристик это ускоряет открытие карточки в разы (нужен только текст
-        характеристик и src фото, а не сами файлы).
-        """
+    async def new_page(self) -> Page:
+        """Создать дополнительную вкладку (для параллельной обработки позиций)."""
         if self._context is None:
             raise RuntimeError("EkromClient не запущен — вызовите start()/используйте 'async with'")
         page = await self._context.new_page()
         page.on("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
-        if block_heavy:
-            await page.route(
-                "**/*",
-                lambda route: (
-                    route.abort()
-                    if route.request.resource_type
-                    in ("image", "stylesheet", "font", "media")
-                    else route.continue_()
-                ),
-            )
         return page
 
     # ── Авторизация ────────────────────────────────────────────────────────────

@@ -91,3 +91,20 @@ def test_urls_without_attributes_and_count(tmp_path):
     cache.update_enrichment("u1", {"Цвет": "Белый"}, None)
     assert cache.urls_without_attributes() == ["u2"]
     assert cache.attributes_count() == 1
+
+
+def test_parse_attributes_from_html():
+    from max_ekrom_bot.ekrom.crawler import _parse_attributes
+
+    html = (
+        '<li class="product-info__property">'
+        '<p class="product-info__property-name">Цвет</p>'
+        '<p class="product-info__property-value">Чёрный</p></li>'
+        '<li class="product-info__property">'
+        '<p class="product-info__property-name">Объем, л</p>'
+        '<p class="product-info__property-value">72</p></li>'
+        '<li><p class="product-info__property-name">Пусто</p>'
+        '<p class="product-info__property-value"></p></li>'
+    )
+    attrs = _parse_attributes(html)
+    assert attrs == {"Цвет": "Чёрный", "Объем, л": "72"}  # пустое значение пропущено
