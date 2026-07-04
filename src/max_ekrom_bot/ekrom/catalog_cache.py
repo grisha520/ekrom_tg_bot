@@ -148,3 +148,21 @@ class CatalogCache:
     def count(self) -> int:
         with self._conn() as c:
             return c.execute("SELECT COUNT(*) FROM products").fetchone()[0]
+
+    def urls_without_attributes(self) -> list[str]:
+        """URL товаров, у которых ещё нет характеристик — для инкрементального
+        обогащения краулером (уже обогащённые не трогаем при повторных прогонах)."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT url FROM products "
+                "WHERE attributes IS NULL OR attributes='' OR attributes='{}'"
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def attributes_count(self) -> int:
+        """Сколько товаров уже с характеристиками (для отчёта краула)."""
+        with self._conn() as c:
+            return c.execute(
+                "SELECT COUNT(*) FROM products "
+                "WHERE attributes IS NOT NULL AND attributes<>'' AND attributes<>'{}'"
+            ).fetchone()[0]

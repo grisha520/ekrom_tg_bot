@@ -17,17 +17,25 @@ import json
 from max_ekrom_bot.config import REPO_ROOT, get_settings
 from max_ekrom_bot.ekrom.client import EkromClient
 
-# Разделы реальной техники + сантехника для кухни (мойки, смесители — их часто
-# спрашивают клиенты). Без аксессуаров/акций/дисконта/сравнения/комплектов.
-INCLUDE_PREFIXES = (
-    "/catalog/tekhnika_dlya_kukhni/",
-    "/catalog/santekhnika_dlya_kukhni/",
-    "/catalog/tekhnika_dlya_doma/",
-    "/catalog/tekhnika_dlya_ukhoda_za_odezhdoy/",
-    "/catalog/klimaticheskaya_tekhnika/",
-    "/catalog/mbt/",
-    "/catalog/krasota_i_zdorove/",
-)
+# Берём ВСЕ товарные разделы каталога (чёрный список — так будущие разделы
+# попадут автоматически). Исключаем не-категории: дубли (дисконт, акции),
+# наборы (комплекты) и служебные страницы (сравнение) — они путают резолвер и
+# дублируют товары в кэше.
+EXCLUDE_SECTIONS = {
+    "aktsii",            # Акции (кросс-секция, дубли товаров)
+    "diskont_tsentr",    # Дисконт-центр (дубли товаров со скидкой)
+    "komplekt_tekhniki", # Комплекты (наборы, не единичный товар)
+    "compare",           # Сравнение (инструмент, не категория)
+}
+
+
+def _section(href: str) -> str | None:
+    parts = [p for p in href.split("/") if p]
+    return parts[1] if len(parts) >= 2 and parts[0] == "catalog" else None
+
+
+def _depth(href: str) -> int:
+    return len([p for p in href.split("/") if p])
 
 _JS = r"""
 () => {
@@ -53,16 +61,18 @@ async def main() -> None:
         await page.wait_for_timeout(2500)
         links: dict[str, str] = await page.evaluate(_JS)  # href -> name
 
-    # Все категории включённых разделов, КРОМЕ корней самих разделов (слишком
-    # широкие). Берём все уровни (и родителя «Духовые шкафы», и лист
-    # «Электрические») — LLM сам выберет нужную глубину под конкретику запроса.
-    include = set(INCLUDE_PREFIXES)
-    cats = {h: t for h, t in links.items()
-            if h not in include and any(h.startswith(p) for p in include)}
+    # Все категории товарных разделов (глубина ≥3: /catalog/<раздел>/<категория>/),
+    # кроме корней разделов и чёрного списка. Берём все уровни (и родителя «Духовые
+    # шкафы», и лист «Электрические») — LLM выберет нужную глубину под запрос.
+    cats = {
+        h: t for h, t in links.items()
+        if (sec := _section(h)) and sec not in EXCLUDE_SECTIONS and _depth(h) >= 3
+    }
 
     categories: list[dict] = []
     for href, name in sorted(cats.items()):
-        section = next((links.get(p, "") for p in include if href.startswith(p)), "")
+        sec = _section(href)
+        section = links.get(f"/catalog/{sec}/", "") if sec else ""
         crumbs = sorted(
             ((h2, t2) for h2, t2 in cats.items() if href != h2 and href.startswith(h2)),
             key=lambda x: len(x[0]),

@@ -22,8 +22,9 @@ def main() -> None:
     print("\n=== Итог краула ===")
     for path, n in results.items():
         print(f"{n:5d}  {path}")
-    total = CatalogCache(get_settings().catalog_db_path).count()
-    print(f"всего товаров в кэше: {total}")
+    cache = CatalogCache(get_settings().catalog_db_path)
+    print(f"всего товаров в кэше: {cache.count()}")
+    print(f"с характеристиками:  {cache.attributes_count()}")
 
 
 if __name__ == "__main__":

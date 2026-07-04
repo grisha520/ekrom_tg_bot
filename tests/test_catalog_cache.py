@@ -81,3 +81,13 @@ def test_update_enrichment_sets_attrs_and_image(tmp_path):
     got = cache.query_category(CAT)[0]
     assert got.attributes == {"Объем, л": "71"}
     assert got.image_url == "https://x/i.jpg"
+
+
+def test_urls_without_attributes_and_count(tmp_path):
+    cache = CatalogCache(tmp_path / "c.db")
+    cache.upsert_many([_p("u1", "A", 100), _p("u2", "B", 200)], CAT)
+    assert set(cache.urls_without_attributes()) == {"u1", "u2"}
+    assert cache.attributes_count() == 0
+    cache.update_enrichment("u1", {"Цвет": "Белый"}, None)
+    assert cache.urls_without_attributes() == ["u2"]
+    assert cache.attributes_count() == 1
