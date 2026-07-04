@@ -386,6 +386,37 @@ def _value_matches(requested: str, product_val: str) -> bool:
     return bool(r) and (r in p or p in r)
 
 
+def _constraint_result(product: CatalogProduct, c) -> bool | None:
+    """Выполняется ли ограничение по характеристике (attr_constraint) у товара.
+
+    None — атрибута у товара нет (неизвестно, «молчание»): в фильтре не отсекаем.
+    Операторы: gte (≥), lte (≤), approx (≈±15%), eq (точное/категориальное; для
+    класса энергопотребления — «равен или лучше»).
+    """
+    attrs = product.attributes or {}
+    pv = attrs.get(c.attribute)
+    if pv is None:
+        pv = _find_attr_value(product, c.attribute)  # запасной нечёткий поиск ключа
+    if pv is None or not str(pv).strip():
+        return None
+    op = getattr(c, "op", "eq")
+    if op in ("gte", "lte", "approx"):
+        rn, pn = _num(c.value), _num(pv)
+        if rn is None or pn is None:
+            return _value_matches(c.value, pv)
+        if op == "gte":
+            return pn >= rn * 0.98
+        if op == "lte":
+            return pn <= rn * 1.02
+        return abs(pn - rn) <= max(rn * 0.15, 0.5)
+    # eq: класс энергопотребления — «равен или лучше», иначе категориальное вхождение
+    if "класс энерг" in c.attribute.lower():
+        wr, pr = _energy_rank(c.value), _energy_rank(pv)
+        if wr is not None and pr is not None:
+            return pr <= wr
+    return _value_matches(c.value, pv)
+
+
 def _product_colors(product: CatalogProduct) -> set[str]:
     text = product.title
     cval = _attr_get(product, "цвет")
@@ -447,6 +478,15 @@ class ProductSelector:
         """Кандидаты, прошедшие фильтры, отсортированные по взвешенному скорингу."""
         filtered = [c for c in candidates if self._passes_filters(spec, c)]
         priced = [c for c in filtered if c.price is not None]
+        # Смягчение: если ограничения по характеристикам обнулили выдачу — пробуем
+        # без них (базовые фильтры цвета/материала/… остаются), чтобы не вернуть
+        # «не найдено». Ограничения тогда работают только как сигнал ранжирования.
+        if not priced and spec.attr_constraints:
+            filtered = [
+                c for c in candidates
+                if self._passes_filters(spec, c, ignore_constraints=True)
+            ]
+            priced = [c for c in filtered if c.price is not None]
         if not priced:
             return []
         # Ценовой потолок («до 30000»): оставляем только то, что в бюджет. Если в
@@ -508,11 +548,23 @@ class ProductSelector:
             return False
         return not _color_conflict(_canon_color(spec.color), title_colors)
 
-    def _passes_filters(self, spec: ProductSpec, product: CatalogProduct) -> bool:
+    def _passes_filters(
+        self, spec: ProductSpec, product: CatalogProduct, ignore_constraints: bool = False
+    ) -> bool:
         # Конфликт подтипов («кофемашина» vs кофеварка, «камера» vs ларь): клиент
         # явно назвал подтип — противоположный в названии/атрибутах отсеиваем.
         if spec.raw_text and _subtype_conflict(spec.raw_text, _product_subtype_text(product)):
             return False
+
+        # Ограничения по характеристикам (схемо-маппер): eq/gte/lte — жёстко
+        # отсекаем при ЯВНОМ несоответствии; approx — только сигнал (не фильтр);
+        # неизвестное значение («молчание») — не отсекаем.
+        if not ignore_constraints:
+            for c in spec.attr_constraints:
+                if c.op == "approx":
+                    continue
+                if _constraint_result(product, c) is False:
+                    return False
 
         colors = _product_colors(product)
 
@@ -607,6 +659,11 @@ class ProductSelector:
             requested += 1
             pv = _find_attr_value(product, name)
             if pv is not None and _value_matches(value, pv):
+                matched += 1
+        # Ограничения схемо-маппера — точный сигнал по реальным атрибутам.
+        for c in spec.attr_constraints:
+            requested += 1
+            if _constraint_result(product, c) is True:
                 matched += 1
         return matched, requested
 

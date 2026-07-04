@@ -25,6 +25,29 @@ class ApplianceType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class AttrConstraint(BaseModel):
+    """Ограничение по характеристике товара, привязанное к РЕАЛЬНОМУ атрибуту сайта.
+
+    Заполняется схемо-маппером (LLM выбирает `attribute` из настоящих атрибутов
+    категории), поэтому сопоставление точное, а не по угадыванию.
+    """
+
+    attribute: str                 # точное имя атрибута с сайта («Скорость отжима, оборотов/мин»)
+    op: str = "eq"                 # eq | gte | lte | approx
+    value: str
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _norm_op(cls, v: object) -> object:
+        s = str(v or "eq").strip().lower()
+        return s if s in {"eq", "gte", "lte", "approx"} else "eq"
+
+    @field_validator("attribute", "value", mode="before")
+    @classmethod
+    def _to_str(cls, v: object) -> object:
+        return "" if v is None else str(v)
+
+
 class ProductSpec(BaseModel):
     """Одна позиция из запроса клиента в структурированном виде.
 
@@ -65,6 +88,25 @@ class ProductSpec(BaseModel):
     # Жёсткие исключения (например «не чёрную», «кроме газовых»)
     exclude_colors: list[str] = Field(default_factory=list)
     exclude_fuel: list[str] = Field(default_factory=list)
+
+    # Ограничения по характеристикам, привязанные к реальным атрибутам категории
+    # (заполняет схемо-маппер). Точнее, чем свободный extra.
+    attr_constraints: list[AttrConstraint] = Field(default_factory=list)
+
+    @field_validator("attr_constraints", mode="before")
+    @classmethod
+    def _coerce_constraints(cls, v: object) -> object:
+        if v is None:
+            return []
+        if isinstance(v, list):
+            # Отсеиваем мусор без имени атрибута/значения.
+            out = []
+            for it in v:
+                if isinstance(it, dict) and str(it.get("attribute") or "").strip() \
+                        and str(it.get("value") or "").strip():
+                    out.append(it)
+            return out
+        return []
 
     # LLM нередко присылает null вместо пустого списка/словаря — приводим к default,
     # чтобы валидация не падала (поля по схеме всё равно необязательные).

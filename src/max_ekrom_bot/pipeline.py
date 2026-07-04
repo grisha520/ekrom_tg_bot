@@ -142,6 +142,7 @@ class Pipeline:
         self._llm = None  # ленивый LLM-провайдер для ре-ранка (#6)
         self._resolver = None  # ленивый резолвер категорий
         self._cache = None  # ленивый кэш каталога
+        self._attr_mapper = None  # ленивый схемо-маппер характеристик
 
     def _get_cache(self):
         """Кэш каталога (или None, если выключен в настройках)."""
@@ -167,11 +168,41 @@ class Pipeline:
             self._resolver = CategoryResolver(settings=self._settings)
         return self._resolver
 
+    def _get_attr_mapper(self):
+        if self._attr_mapper is None:
+            from .parsing.attr_mapper import AttrMapper
+
+            self._attr_mapper = AttrMapper(settings=self._settings)
+        return self._attr_mapper
+
+    def _spec_category_path(self, spec) -> str | None:
+        return category_for(spec.appliance) or spec.category_url
+
+    def _map_attributes(self, specs) -> None:
+        """Привязать характеристики запроса к реальным атрибутам категории (LLM
+        со схемой из кэша). Требует включённого кэша каталога; без него — no-op,
+        остаётся свободный extra как запасной механизм."""
+        cache = self._get_cache()
+        if cache is None:
+            return
+        from .matching.attr_schema import get_category_schema
+
+        items = []
+        for spec in specs:
+            cat = self._spec_category_path(spec)
+            schema = get_category_schema(cache, cat) if cat else {}
+            items.append((spec, schema))
+        try:
+            self._get_attr_mapper().map(items)
+        except Exception:  # noqa: BLE001 — маппер не критичен
+            logger.warning("схемо-маппер не удался", exc_info=True)
+
     def parse_message(self, message: str) -> CustomerRequest:
         """Разобрать текст клиента в структурированный запрос (только LLM, без сети сайта).
 
         Для позиций, не легших в 6 встроенных типов, дополнительно выбираем
-        категорию каталога моделью (расширение на весь каталог).
+        категорию каталога моделью (расширение на весь каталог), затем привязываем
+        упомянутые характеристики к реальным атрибутам категории (схемо-маппер).
         """
         request = self._parser.parse(message)
         if any(s.appliance is ApplianceType.UNKNOWN for s in request.specs):
@@ -179,6 +210,7 @@ class Pipeline:
                 self._get_resolver().resolve(request.specs)
             except Exception:  # noqa: BLE001 — выбор категории не критичен
                 logger.warning("выбор категории не удался", exc_info=True)
+        self._map_attributes(request.specs)
         return request
 
     async def select_products(
