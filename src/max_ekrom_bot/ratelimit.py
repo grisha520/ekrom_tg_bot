@@ -46,3 +46,21 @@ class RateLimiter:
         """Зафиксировать обращение (вызывать после allowed()==True)."""
         now = time.time() if now is None else now
         self._hits[uid].append(now)
+
+    def retry_after(self, uid: int, now: float | None = None) -> float:
+        """Секунд до момента, когда запрос снова будет разрешён (0 — уже можно).
+
+        Если блокируют оба окна (час и сутки) — берём больший срок ожидания.
+        """
+        now = time.time() if now is None else now
+        dq = self._hits[uid]
+        self._prune(dq, now)
+        waits: list[float] = []
+        if self._per_day and len(dq) >= self._per_day:
+            # ждём, пока самый старый запрос выпадет из суточного окна
+            waits.append(dq[0] + _DAY - now)
+        if self._per_hour:
+            in_hour = [t for t in dq if now - t <= _HOUR]
+            if len(in_hour) >= self._per_hour:
+                waits.append(in_hour[0] + _HOUR - now)
+        return max(0.0, max(waits)) if waits else 0.0

@@ -336,11 +336,50 @@ async def _notify_lead(message: Message, selection: SelectionResult) -> None:
             logger.warning("не удалось отправить лид админу %s", admin_id, exc_info=True)
 
 
-def _rate_limit_text() -> str:
+def _fmt_wait(seconds: float) -> str:
+    """Человеко-читаемое «через N минут/часов» до сброса лимита."""
+    mins = max(1, round(seconds / 60))
+    if mins < 60:
+        return f"через {mins} мин"
+    hours = round(mins / 60)
+    return f"через {hours} ч"
+
+
+def _rate_limit_text(retry_after: float = 0.0) -> str:
+    when = f" Снова можно {_fmt_wait(retry_after)}." if retry_after > 0 else ""
     return (
-        "⏳ Вы отправили много запросов за короткое время.\n"
-        "Пожалуйста, попробуйте чуть позже — или напишите менеджеру, он поможет."
+        "⏳ Вы сделали много подборов за короткое время.\n"
+        f"Пожалуйста, попробуйте чуть позже.{when}\n"
+        "Я пришлю уведомление, как только лимит обновится. "
+        "Или напишите менеджеру — он поможет."
     )
+
+
+# Клиенты, которым уже отправили отказ по лимиту и ждём напомнить о сбросе:
+# uid → момент времени (unix), когда снова можно.
+_LIMIT_NOTIFY: dict[int, float] = {}
+
+
+def _limit_reset_text() -> str:
+    return (
+        "✅ Лимит обновился — снова можно подбирать технику!\n"
+        "Напишите, что ищете, или нажмите 💡 Примеры."
+    )
+
+
+async def _limit_notifier(bot: Bot) -> None:
+    """Фоновая задача: уведомляет клиентов, когда их лимит сбросился."""
+    while True:
+        await asyncio.sleep(30)
+        now = time.time()
+        rl = _ratelimiter()
+        ready = [uid for uid, ts in list(_LIMIT_NOTIFY.items()) if now >= ts and rl.allowed(uid)]
+        for uid in ready:
+            _LIMIT_NOTIFY.pop(uid, None)
+            try:
+                await bot.send_message(uid, _limit_reset_text())
+            except Exception:  # noqa: BLE001 — клиент мог заблокировать бота
+                logger.info("не удалось уведомить о сбросе лимита %s", uid, exc_info=True)
 
 
 # Кнопки постоянной клавиатуры оператора (нажатие шлёт этот текст).
@@ -654,9 +693,12 @@ async def handle_text(message: Message) -> None:
     if client and uid is not None and not _is_operator(uid):
         rl = _ratelimiter()
         if not rl.allowed(uid):
-            await message.answer(_rate_limit_text())
+            wait = rl.retry_after(uid)
+            _LIMIT_NOTIFY[uid] = time.time() + wait  # напомним о сбросе
+            await message.answer(_rate_limit_text(wait))
             return
         rl.hit(uid)
+        _LIMIT_NOTIFY.pop(uid, None)  # успешно — снимаем ожидание уведомления
 
     await _run_pick(message, text, op=op, client=client, real_op=_is_operator(uid))
 
@@ -889,9 +931,12 @@ async def callback_example(callback: CallbackQuery) -> None:
     if client and uid is not None and not _is_operator(uid):
         rl = _ratelimiter()
         if not rl.allowed(uid):
-            await callback.message.answer(_rate_limit_text())
+            wait = rl.retry_after(uid)
+            _LIMIT_NOTIFY[uid] = time.time() + wait
+            await callback.message.answer(_rate_limit_text(wait))
             return
         rl.hit(uid)
+        _LIMIT_NOTIFY.pop(uid, None)
     await _run_pick(
         callback.message, query, op=op, client=client, real_op=_is_operator(uid)
     )
@@ -1233,7 +1278,15 @@ async def main() -> None:
         "Telegram-бот запущен (long polling). Менеджеров: %s",
         len(settings.allowed_telegram_user_ids),
     )
-    await dp.start_polling(bot)
+    # Фоновая задача: уведомляем клиентов о сбросе лимита (только в клиентском режиме).
+    notifier = None
+    if settings.client_mode:
+        notifier = asyncio.create_task(_limit_notifier(bot))
+    try:
+        await dp.start_polling(bot)
+    finally:
+        if notifier is not None:
+            notifier.cancel()
 
 
 if __name__ == "__main__":
