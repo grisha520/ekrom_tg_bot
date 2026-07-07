@@ -212,16 +212,20 @@ def build_cart_style_pdf(
     story.append(Paragraph("Итого", st["big"]))
     story.append(Spacer(1, 2 * mm))
 
-    # Скидку/пометку берём из движка (combo), иначе — из легаси-параметров.
+    # Скидку/подарок/пометку берём из движка (combo), иначе — из легаси-параметров.
     disc_amount = 0.0
     disc_label: str | None = None
+    gift_line: tuple[str, float] | None = None
     note = promo_note
     manager_review = False
     if combo is not None:
         subtotal = combo.subtotal
         note = combo.note or promo_note
         manager_review = combo.manager_review
-        if combo.applied:
+        if combo.applied and combo.gift_title:
+            # Подарок идёт СВЕРХУ бесплатно — сумму комплекта не уменьшает.
+            gift_line = (combo.gift_title, combo.discount_total)
+        elif combo.applied:
             disc_amount = combo.discount_total
             disc_label = (
                 f"Скидка на комплект −{combo.combo_discount_pct:g}%"
@@ -235,12 +239,17 @@ def build_cart_style_pdf(
     if disc_label and disc_amount:
         rows.append([Paragraph(disc_label, st["total_l"]),
                      Paragraph("−" + _fmt(disc_amount), st["total_v"])])
+    if gift_line:
+        g_title, g_price = gift_line
+        rows.append([Paragraph(f"В подарок: {g_title} (стоимость {_fmt(g_price)})", st["total_l"]),
+                     Paragraph("бесплатно", st["total_v"])])
     final = subtotal - disc_amount
+    final_label = "Сумма к оплате" if (gift_line and not disc_amount) else "Сумма со скидкой"
     tt = Table(rows, colWidths=[130 * mm, 50 * mm])
     tt.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
     story.append(tt)
     story.append(Spacer(1, 1.5 * mm))
-    final_t = Table([[Paragraph("Сумма со скидкой", st["big"]), Paragraph(_fmt(final), st["bigv"])]],
+    final_t = Table([[Paragraph(final_label, st["big"]), Paragraph(_fmt(final), st["bigv"])]],
                     colWidths=[130 * mm, 50 * mm])
     final_t.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, 0), 1, _INK), ("TOPPADDING", (0, 0), (-1, -1), 4), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
     story.append(final_t)

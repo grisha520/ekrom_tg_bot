@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from max_ekrom_bot.matching.combo_pricing import ComboItem, compute_combo
+from max_ekrom_bot.matching.combo_pricing import ComboItem, best_combo, compute_combo
 
 
 class _Camp:
     """Лёгкая заглушка кампании (как PromoCampaign / строка PromoStore)."""
 
-    def __init__(self, mechanic, tiers=None, requires_oven=False):
+    def __init__(self, mechanic, tiers=None, requires_oven=False, slug=None):
         self.mechanic = mechanic
         self.tiers = tiers or {}
         self.requires_oven = requires_oven
+        self.slug = slug or mechanic
 
 
 def _oven(price):
@@ -129,3 +130,66 @@ def test_accepts_dict_campaign_from_store():
     r = compute_combo([_oven(30000), _cooktop(20000)], camp)
     assert r.combo_discount_pct == 5
     assert r.discount_total == 2500.0
+
+
+# ── Подарок как выгода + выбор выгоднейшей акции ──────────────────────────────
+
+def _gift_value_5000(campaign, items):
+    # Оцифровщик-заглушка: подарок «Чайник» стоимостью 5000, если ≥2 позиций.
+    return ("Чайник KWK 0902 G", 5000) if len(items) >= 2 else None
+
+
+def test_gift_valued_does_not_reduce_total():
+    items = [_oven(30000), _cooktop(20000)]
+    r = compute_combo(items, _Camp("gift"), gift_value=_gift_value_5000)
+    assert r.applied is True
+    assert r.manager_review is False
+    assert r.gift_title == "Чайник KWK 0902 G"
+    assert r.discount_total == 5000.0        # выгода = цена подарка
+    assert r.final_total == 50000.0          # сумма НЕ уменьшается — подарок сверху
+
+
+def test_gift_without_valuer_is_manager_review():
+    r = compute_combo([_oven(30000), _cooktop(20000)], _Camp("gift"))
+    assert r.manager_review is True and r.applied is False
+
+
+def test_best_combo_picks_highest_benefit():
+    # У бренда две акции: каскад −25% на наименьший (20000→5000) и подарок на 8000.
+    items = [_oven(40000), _cooktop(20000)]
+    cascade = _Camp("cascade_cheapest", {2: 25}, slug="cascade")
+    gift = _Camp("gift", slug="gift")
+
+    def gift_8000(c, it):
+        return ("СВЧ в подарок", 8000)
+
+    best = best_combo(items, [cascade, gift], gift_value=gift_8000)
+    assert best.campaign_slug == "gift"      # подарок 8000 > скидка 5000
+    assert best.discount_total == 8000.0
+
+
+def test_best_combo_prefers_bigger_discount():
+    items = [_oven(40000), _cooktop(20000)]
+    cascade = _Camp("cascade_cheapest", {2: 25}, slug="cascade")  # 5000
+    gift = _Camp("gift", slug="gift")
+
+    def gift_3000(c, it):
+        return ("Мелочь", 3000)
+
+    best = best_combo(items, [cascade, gift], gift_value=gift_3000)
+    assert best.campaign_slug == "cascade"   # скидка 5000 > подарок 3000
+    assert best.discount_total == 5000.0
+
+
+def test_best_combo_falls_back_to_manager_review():
+    # Ни одна не считается численно (подарок без оцифровщика) → пометка менеджеру.
+    items = [_oven(40000), _cooktop(20000)]
+    best = best_combo(items, [_Camp("gift"), _Camp("unknown")])
+    assert best.manager_review is True
+
+
+def test_best_combo_no_campaigns_is_price_list():
+    # Lex: акций нет → по прайсу.
+    best = best_combo([_oven(40000), _cooktop(20000)], [])
+    assert best.mechanic == "none" and best.applied is False
+    assert best.final_total == 60000.0

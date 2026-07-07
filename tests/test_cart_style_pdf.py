@@ -94,3 +94,18 @@ def test_cart_style_pdf_manager_review(tmp_path):
     build_cart_style_pdf(_sel(), Settings(LLM_PROVIDER="rule"), out, combo=combo)
     text = _text(out)
     assert "менеджер" in text.lower()
+
+
+def test_cart_style_pdf_gift_line(tmp_path):
+    # Оцифрованный подарок: отдельная строка, сумма к оплате НЕ уменьшается.
+    from max_ekrom_bot.matching.combo_pricing import ComboResult
+
+    out = tmp_path / "giftline.pdf"
+    combo = ComboResult(mechanic="gift", subtotal=124903, discount_total=5990,
+                        final_total=124903, applied=True,
+                        gift_title="Чайник Korting KWK 0902 G",
+                        note="В подарок: Чайник Korting KWK 0902 G — бесплатно.")
+    build_cart_style_pdf(_sel(), Settings(LLM_PROVIDER="rule"), out, combo=combo)
+    text = _text(out)
+    assert "В подарок" in text and "KWK 0902 G" in text
+    assert "Сумма к оплате" in text
