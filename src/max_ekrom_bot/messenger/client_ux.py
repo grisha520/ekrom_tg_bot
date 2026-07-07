@@ -318,6 +318,71 @@ TIER_PDF_LABELS: dict[str, str] = {
 }
 
 
+# ── Режим «Собери комплект» (5 брендов по акциям) ────────────────────────────
+
+def kit_welcome_text(settings: Settings) -> str:
+    shop = html.escape(settings.shop_name)
+    return (
+        f"👋 <b>Добро пожаловать в {shop}!</b>\n\n"
+        "Я собираю <b>комплект встраиваемой техники ОДНОГО бренда</b> и считаю "
+        "выгоду по действующим акциям — со скидкой на комплект или техникой в подарок.\n\n"
+        "<b>Как написать запрос</b>\n"
+        "Перечислите нужные позиции одним сообщением, например:\n"
+        "• <i>духовой шкаф, варочная панель и вытяжка</i>\n"
+        "• <i>холодильник, посудомойка, духовка и варочная</i>\n\n"
+        "Я подберу бренд, где комплект выгоднее всего, и пришлю <b>PDF</b>.\n\n"
+        "<i>Совместимость по дизайну — визуальная (цвет/финиш); точность подтвердит менеджер.</i>"
+    )
+
+
+def format_kit(kit: object, settings: Settings) -> str:
+    """Клиентское превью собранного комплекта: бренд, позиции, выгода, дизайн."""
+    shop = html.escape(settings.shop_name)
+    combo = kit.combo
+    n = kit.coverage
+    lines = [f"✅ <b>Комплект {html.escape(kit.brand)}</b> · {n} {_plural_pos(n)}"]
+    if not kit.is_full:
+        lines.append(
+            f"<i>Закрыли {kit.coverage} из {kit.requested} — по остальному поможет менеджер.</i>"
+        )
+    lines.append("")
+
+    for m in kit.selection.matched:
+        p = m.product
+        lines.append(f"• <b>{html.escape(p.title)}</b> — {_fmt_price(p.price or 0)}")
+    for m in kit.selection.unmatched:
+        pos = html.escape(m.spec.raw_text or "позиция")
+        lines.append(f"• <i>{pos}: у бренда не нашлось подходящего</i>")
+
+    lines.append("")
+    lines.append(f"Сумма комплекта: <b>{_fmt_price(combo.subtotal)}</b>")
+    if combo.applied and combo.gift_title:
+        lines.append(
+            f"🎁 В подарок: <b>{html.escape(combo.gift_title)}</b> "
+            f"(стоимость {_fmt_price(combo.discount_total)}) — бесплатно"
+        )
+        lines.append(f"К оплате: <b>{_fmt_price(combo.final_total)}</b>")
+    elif combo.applied:
+        lines.append(f"Выгода по акции: <b>−{_fmt_price(combo.discount_total)}</b>")
+        lines.append(f"К оплате: <b>{_fmt_price(combo.final_total)}</b>")
+    elif combo.manager_review:
+        lines.append("<i>По этой акции точную выгоду подтвердит менеджер.</i>")
+
+    if kit.design_note:
+        lines.append("")
+        lines.append(f"🎨 {html.escape(kit.design_note)}")
+    lines.append(
+        f"\n<i>ℹ️ Автоподбор {shop}. Цены, наличие и итог по акции подтвердит менеджер.</i>"
+    )
+    return "\n".join(lines)
+
+
+def kit_pdf_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📄 Скачать PDF комплекта", callback_data=f"kitpdf:{token}"),
+    ]])
+
+
 def tier_keyboard(token: str, active: str) -> InlineKeyboardMarkup:
     """Табы уровней (актив помечен галочкой) + кнопка PDF активного уровня."""
     tabs = [

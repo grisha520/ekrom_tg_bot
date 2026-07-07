@@ -58,14 +58,18 @@ from .messenger.client_ux import (
     followup_keyboard,
     format_client_selection,
     format_history_list,
+    format_kit,
     history_inline_keyboard,
     is_smalltalk,
+    kit_pdf_keyboard,
+    kit_welcome_text,
     smalltalk_reply,
     TIER_PDF_LABELS,
     tier_keyboard,
     welcome_text,
 )
-from .messenger.telegram_format import format_selection
+from .messenger.telegram_format import _fmt_price, format_selection
+from .matching.kit_builder import BrandKit
 from .models import CustomerRequest, SelectionResult
 from .pdf import build_offer_pdf
 from .pick_history import PickHistoryStore
@@ -102,6 +106,17 @@ def _tier_store_put(token: str, state: _TierState) -> None:
     _TIER_STORE[token] = state
     while len(_TIER_STORE) > _TIER_STORE_MAX:
         _TIER_STORE.pop(next(iter(_TIER_STORE)))
+
+
+# Комплекты (Ф5): token → собранный BrandKit (кнопка PDF живёт дольше диалога).
+_KIT_STORE: dict[str, BrandKit] = {}
+_KIT_STORE_MAX = 300
+
+
+def _kit_store_put(token: str, kit: BrandKit) -> None:
+    _KIT_STORE[token] = kit
+    while len(_KIT_STORE) > _KIT_STORE_MAX:
+        _KIT_STORE.pop(next(iter(_KIT_STORE)))
 
 
 # Не даём одному чату запускать два тяжёлых процесса одновременно.
@@ -516,6 +531,15 @@ async def cmd_start(message: Message) -> None:
         return
     if get_settings().client_mode:
         s = get_settings()
+        if s.kit_mode:
+            # Режим комплекта: свой онбординг, без табов-примеров одиночных позиций.
+            await message.answer(
+                kit_welcome_text(s),
+                parse_mode=ParseMode.HTML,
+                reply_markup=_client_keyboard(),
+                disable_web_page_preview=True,
+            )
+            return
         await message.answer(
             welcome_text(s),
             parse_mode=ParseMode.HTML,
@@ -700,7 +724,10 @@ async def handle_text(message: Message) -> None:
         rl.hit(uid)
         _LIMIT_NOTIFY.pop(uid, None)  # успешно — снимаем ожидание уведомления
 
-    await _run_pick(message, text, op=op, client=client, real_op=_is_operator(uid))
+    if get_settings().kit_mode:
+        await _run_kit(message, text, real_op=_is_operator(uid))
+    else:
+        await _run_pick(message, text, op=op, client=client, real_op=_is_operator(uid))
 
 
 async def _run_pick(
@@ -832,6 +859,127 @@ async def _run_pick(
                 duration_sec=time.perf_counter() - t0,
                 queue_wait_sec=queue_wait,
             )
+
+
+async def _run_kit(message: Message, text: str, *, real_op: bool = False) -> None:
+    """Режим «Собери комплект»: разбор позиций → сборка комплекта бренда → превью+PDF.
+
+    Бот подбирает бренд, где комплект выгоднее по акции, показывает состав/выгоду/
+    дизайн-пометку и кнопку PDF. Лид уходит менеджеру (кроме предпросмотра оператора).
+    """
+    uid = message.from_user.id if message.from_user else None
+    t0 = time.perf_counter()
+    queue_wait = 0.0
+    success = False
+    matched_count = 0
+
+    chat_id = message.chat.id
+    lock = _chat_lock(chat_id)
+    if lock.locked():
+        await message.answer("⏳ Уже собираю предыдущий комплект — подождите.")
+        return
+
+    async with lock:
+        try:
+            await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
+            status = await message.answer(client_status_parse(), parse_mode=ParseMode.HTML)
+            pipeline = Pipeline(get_settings())
+
+            try:
+                request = pipeline.parse_message(text)
+            except (ValueError, ValidationError):
+                await status.edit_text(
+                    "🤔 Не понял, какую технику собрать. Перечислите позиции — "
+                    "например: <i>духовой шкаф, варочная панель и вытяжка</i>.",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+            except Exception:  # noqa: BLE001
+                await status.edit_text(
+                    "⚙️ Сервис временно недоступен. Попробуйте, пожалуйста, чуть позже."
+                )
+                return
+
+            await message.bot.send_chat_action(chat_id, ChatAction.TYPING)
+            await status.edit_text(client_status_select(), parse_mode=ParseMode.HTML)
+
+            try:
+                queue_t0 = time.perf_counter()
+                async with _EKROM_LOCK:
+                    queue_wait = time.perf_counter() - queue_t0
+                    kit = await pipeline.select_kit(request)
+            except Exception:  # noqa: BLE001
+                logger.exception("select_kit failed")
+                await status.edit_text(
+                    "😔 Не удалось собрать комплект сейчас. Попробуйте через минуту "
+                    "или напишите менеджеру."
+                )
+                return
+
+            if kit is None or kit.coverage == 0:
+                await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
+                if not real_op and kit is not None:
+                    await _notify_lead(message, kit.selection)
+                return
+
+            success = True
+            matched_count = kit.coverage
+            token = uuid.uuid4().hex
+            _kit_store_put(token, kit)
+            await status.edit_text(
+                format_kit(kit, get_settings()),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_markup=kit_pdf_keyboard(token),
+            )
+            if not real_op:
+                await _notify_lead(message, kit.selection)
+        finally:
+            _record_pick_metric(
+                uid,
+                client=True,
+                success=success,
+                matched_count=matched_count,
+                duration_sec=time.perf_counter() - t0,
+                queue_wait_sec=queue_wait,
+            )
+
+
+async def callback_kit_pdf(callback: CallbackQuery) -> None:
+    """PDF собранного комплекта (свой генератор в стиле корзины ekrom)."""
+    if not callback.data or not callback.message:
+        await callback.answer()
+        return
+    uid = callback.from_user.id if callback.from_user else None
+    if not _can_use(uid):
+        await callback.answer("Доступ запрещён", show_alert=True)
+        return
+
+    token = callback.data.removeprefix("kitpdf:")
+    kit = _KIT_STORE.get(token)
+    if kit is None or not kit.selection.matched:
+        await callback.answer("Комплект устарел — соберите заново.", show_alert=True)
+        return
+
+    await callback.answer("📄 Готовлю PDF…")
+    try:
+        pipeline = Pipeline(get_settings())
+        pdf_path = await asyncio.to_thread(pipeline.build_kit_pdf, kit, None)
+        await callback.message.answer_document(
+            FSInputFile(pdf_path),
+            caption=f"📄 Комплект {kit.brand} · {_fmt_price(kit.combo.final_total)}",
+        )
+        if uid is not None:
+            _history().add(
+                uid,
+                f"Комплект {kit.brand}",
+                pdf_path,
+                total_price=kit.combo.final_total,
+                matched_count=kit.coverage,
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("kit pdf failed")
+        await callback.message.answer("Не удалось собрать PDF — попробуйте ещё раз.")
 
 
 async def callback_pdf(callback: CallbackQuery) -> None:
@@ -1223,6 +1371,7 @@ def _build_dispatcher() -> Dispatcher:
     dp.callback_query.register(callback_pdf, F.data.startswith("pdf:"))
     dp.callback_query.register(callback_example, F.data.startswith("ex:"))
     dp.callback_query.register(callback_history, F.data.startswith("hist:"))
+    dp.callback_query.register(callback_kit_pdf, F.data.startswith("kitpdf:"))
     dp.callback_query.register(callback_tier_pdf, F.data.startswith("tierpdf:"))
     dp.callback_query.register(callback_tier, F.data.startswith("tier:"))
     dp.callback_query.register(
