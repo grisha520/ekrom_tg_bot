@@ -18,6 +18,8 @@ from .config import Settings, get_settings
 from .ekrom.catalog import build_category_url, category_for
 from .ekrom.client import EkromAuthError, EkromCartError, EkromClient, product_slug
 from .matching import ProductSelector
+from .matching.combo_pricing import make_gift_valuer
+from .matching.kit_builder import BrandKit, choose_best_kit
 from .models import (
     ApplianceType,
     CatalogProduct,
@@ -143,6 +145,7 @@ class Pipeline:
         self._resolver = None  # ленивый резолвер категорий
         self._cache = None  # ленивый кэш каталога
         self._attr_mapper = None  # ленивый схемо-маппер характеристик
+        self._promo_store = None  # ленивое хранилище акций (для комплектов)
 
     def _get_cache(self):
         """Кэш каталога (или None, если выключен в настройках)."""
@@ -160,6 +163,14 @@ class Pipeline:
 
             self._llm = get_llm_provider(self._settings)
         return self._llm
+
+    def _get_promo_store(self):
+        """Хранилище акций (датасет комплектов) — из того же catalog.db."""
+        if self._promo_store is None:
+            from .ekrom.promo_store import PromoStore
+
+            self._promo_store = PromoStore(self._settings.catalog_db_path)
+        return self._promo_store
 
     def _get_resolver(self):
         if self._resolver is None:
@@ -262,6 +273,83 @@ class Pipeline:
 
             items = await asyncio.gather(*(handle(spec) for spec in request.specs))
         return SelectionResult(items=list(items))
+
+    # ── Комплекты 5 брендов по акциям (Ф4) ─────────────────────────────────────
+    def _kit_from_candidates(
+        self, request: CustomerRequest, candidates_per_spec: list[list[CatalogProduct]],
+        *, store, cache=None, level: str | None = None,
+    ) -> BrandKit | None:
+        """Чистая часть сборки комплекта: из готовых кандидатов выбрать лучший бренд.
+
+        Вынесена отдельно (без браузера) ради тестируемости: `store` даёт акции
+        бренда, `cache` — цену подарка для оцифровки (`find_by_model`).
+        """
+        segment = {"budget": "эконом", "premium": "премиум"}.get(level or "", request.segment)
+        selector = ProductSelector(segment=segment)
+        gift_value = make_gift_valuer(cache.find_by_model) if cache is not None else None
+        return choose_best_kit(
+            request.specs, candidates_per_spec, store.campaigns_for_brand,
+            selector=selector, gift_value=gift_value,
+        )
+
+    async def select_kit(
+        self, request: CustomerRequest, level: str | None = None, enrich: bool = True,
+    ) -> BrandKit | None:
+        """Собрать комплект одного бренда под запрос (акции + дизайн-эвристика).
+
+        По каждой позиции берём кандидатов ВСЕХ брендов (bрендовый фильтр — внутри
+        движка), выбираем лучший бренд-комплект, затем обогащаем выбранные товары
+        (характеристики + фото) для клиентского PDF.
+        """
+        store = self._get_promo_store()
+        cache = self._get_cache()
+        async with EkromClient(self._settings) as ekrom:
+            sem = asyncio.Semaphore(_MAX_PARALLEL_SPECS)
+
+            async def gather_one(spec: ProductSpec) -> list:
+                async with sem:
+                    page = await ekrom.new_page()
+                    try:
+                        return await self._candidates_for_spec(ekrom, spec, page)
+                    finally:
+                        await page.close()
+
+            per_spec = await asyncio.gather(*(gather_one(s) for s in request.specs))
+            kit = self._kit_from_candidates(
+                request, [list(c) for c in per_spec], store=store, cache=cache, level=level
+            )
+            if kit is not None and enrich:
+                await self._enrich_kit(ekrom, kit, cache)
+        return kit
+
+    async def _enrich_kit(self, ekrom: EkromClient, kit: BrandKit, cache) -> None:
+        """Дочитать характеристики и фото выбранных товаров комплекта (для PDF)."""
+        sem = asyncio.Semaphore(_MAX_PARALLEL_SPECS)
+
+        async def one(product: CatalogProduct) -> None:
+            async with sem:
+                page = await ekrom.new_page()
+                try:
+                    await ekrom.ensure_enriched(product, page, with_image=True)
+                    if cache is not None:
+                        cache.update_enrichment(
+                            product.url, product.attributes, product.image_url
+                        )
+                finally:
+                    await page.close()
+
+        await asyncio.gather(*(one(m.product) for m in kit.selection.matched if m.product))
+
+    def build_kit_pdf(self, kit: BrandKit, out_path: Path | None = None) -> Path:
+        """Сгенерировать PDF комплекта (свой генератор в стиле корзины ekrom, Ф3).
+
+        Итог акции берём из уже посчитанного `kit.combo` (скидка/подарок/пометка).
+        """
+        from .pdf.cart_style import build_cart_style_pdf
+
+        return build_cart_style_pdf(
+            kit.selection, self._settings, out_path, combo=kit.combo
+        )
 
     # Кап премиум-уровня: не дороже стольких медиан по подходящим кандидатам —
     # отсекает аномально дорогие выбросы (Smeg за 300к под запрос «плита»).

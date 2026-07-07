@@ -1,0 +1,105 @@
+"""Интеграция движка комплекта в pipeline (без браузера) — Ф4.
+
+Проверяем чистую часть `Pipeline._kit_from_candidates` и `build_kit_pdf` на
+временных PromoStore/CatalogCache: выбор бренда, оцифровка подарка из каталога,
+генерация PDF комплекта.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("reportlab")
+
+from pypdf import PdfReader  # noqa: E402
+
+from max_ekrom_bot.config import Settings  # noqa: E402
+from max_ekrom_bot.ekrom.catalog_cache import CatalogCache  # noqa: E402
+from max_ekrom_bot.ekrom.promo_store import PromoStore  # noqa: E402
+from max_ekrom_bot.ekrom.promos import GiftRule, PromoCampaign  # noqa: E402
+from max_ekrom_bot.models import (  # noqa: E402
+    ApplianceType, CatalogProduct, CustomerRequest, ProductSpec,
+)
+from max_ekrom_bot.pipeline import Pipeline  # noqa: E402
+
+OVEN, COOKTOP, HOOD = ApplianceType.OVEN, ApplianceType.COOKTOP, ApplianceType.HOOD
+
+
+def _pipeline():
+    return Pipeline(Settings(LLM_PROVIDER="rule", MANAGER_NAME="Иван"))
+
+
+def _req(*appliances):
+    return CustomerRequest(specs=[ProductSpec(appliance=a, raw_text=a.value) for a in appliances])
+
+
+def _p(brand, kind, price, color="чёрный"):
+    return CatalogProduct(title=f"{kind} {brand} MODEL {color}", url=f"u/{brand}/{kind}",
+                          price=price)
+
+
+def _camp(**kw):
+    base = dict(slug="s", url="u", title="t", brand="Korting")
+    base.update(kw)
+    return PromoCampaign(**base)
+
+
+def test_kit_from_candidates_picks_brand_with_cascade(tmp_path):
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([_camp(slug="casc", mechanic="cascade_cheapest",
+                             tiers={2: 25, 3: 50, 4: 75, 5: 100}, requires_oven=True)])
+    cache = CatalogCache(tmp_path / "cat.db")
+
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000), _p("Midea", "Духовой шкаф", 35000)],
+        [_p("Korting", "Варочная панель", 25000)],
+        [_p("Korting", "Вытяжка", 15000)],
+    ]
+    kit = _pipeline()._kit_from_candidates(_req(OVEN, COOKTOP, HOOD), cands,
+                                           store=store, cache=cache)
+    assert kit is not None and kit.brand == "Korting" and kit.is_full
+    assert kit.combo.mechanic == "cascade_cheapest"
+    assert kit.combo.discount_total == 7500.0  # 50% на наименьший (вытяжка 15000)
+
+
+def test_kit_gift_valued_from_catalog(tmp_path):
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([_camp(slug="mbt", mechanic="gift",
+                             gift=GiftRule("sum", {10000: "KWK 0902"}))])
+    cache = CatalogCache(tmp_path / "cat.db")
+    cache.upsert_many([CatalogProduct(title="Чайник Korting KWK 0902 G", url="g", price=3990)],
+                      "gifts")
+
+    cands = [[_p("Korting", "Духовой шкаф", 40000)], [_p("Korting", "Варочная панель", 20000)]]
+    kit = _pipeline()._kit_from_candidates(_req(OVEN, COOKTOP), cands, store=store, cache=cache)
+    assert kit.brand == "Korting"
+    assert kit.combo.gift_title == "Чайник Korting KWK 0902 G"
+    assert kit.combo.discount_total == 3990.0
+    assert kit.combo.final_total == 60000.0  # подарок сумму не уменьшает
+
+
+def test_kit_lex_without_promo(tmp_path):
+    store = PromoStore(tmp_path / "c.db")  # без кампаний
+    cache = CatalogCache(tmp_path / "cat.db")
+    cands = [[_p("Lex", "Духовой шкаф", 30000)], [_p("Lex", "Варочная панель", 18000)]]
+    kit = _pipeline()._kit_from_candidates(_req(OVEN, COOKTOP), cands, store=store, cache=cache,
+                                           level="budget")
+    assert kit.brand == "Lex" and kit.combo.applied is False
+    assert kit.combo.final_total == 48000.0
+
+
+def test_build_kit_pdf(tmp_path):
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([_camp(slug="casc", mechanic="cascade_cheapest",
+                             tiers={2: 25, 3: 50}, requires_oven=True)])
+    cache = CatalogCache(tmp_path / "cat.db")
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000)],
+        [_p("Korting", "Варочная панель", 20000)],
+    ]
+    pipe = _pipeline()
+    kit = pipe._kit_from_candidates(_req(OVEN, COOKTOP), cands, store=store, cache=cache)
+    out = pipe.build_kit_pdf(kit, tmp_path / "kit.pdf")
+    assert out.exists() and out.stat().st_size > 1000
+    text = "".join(p.extract_text() or "" for p in PdfReader(str(out)).pages)
+    assert "Итого" in text and "Скидка на комплект" in text
