@@ -219,6 +219,9 @@ class CatalogProduct(BaseModel):
     product_id: Optional[str] = None
     # URL главного фото товара (для клиентского PDF), если удалось вытащить
     image_url: Optional[str] = None
+    # Цена до скидки (для акционных товаров) — показываем зачёркнутой в PDF
+    old_price: Optional[float] = None
+    discount_pct: Optional[float] = None
     attributes: dict[str, str] = Field(default_factory=dict)
     # None — ещё не проверяли; True/False — результат проверки на ekrom
     in_stock: Optional[bool] = None

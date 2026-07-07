@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     pdf_font_path: str = Field(default="", alias="PDF_FONT_PATH")
     pdf_logo_path: str = Field(default="", alias="PDF_LOGO_PATH")
 
+    # Шапка/подвал PDF в стиле корзины ekrom (эталонный документ).
+    pdf_header_phone: str = Field(default="8 (343) 379-98-68", alias="PDF_HEADER_PHONE")
+    pdf_city: str = Field(default="Екатеринбург", alias="PDF_CITY")
+    manager_name: str = Field(default="", alias="MANAGER_NAME")
+    manager_email: str = Field(default="", alias="MANAGER_EMAIL")
+    manager_phone: str = Field(default="", alias="MANAGER_PHONE")
+    manager_city_phone: str = Field(default="8 (343) 379-98-68", alias="MANAGER_CITY_PHONE")
+
     # Клиентский режим: бот открыт всем (клиент пишет сам), PDF — свой шаблон без
     # партнёрской корзины, лид уходит менеджерам. Выкл — прежнее поведение «для
     # менеджеров» (доступ по списку, PDF через корзину ekrom).
