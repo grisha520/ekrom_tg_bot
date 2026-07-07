@@ -1,13 +1,14 @@
 """Движок сборки комплекта одного бренда (Ф4 проекта комплектов).
 
 Клиент называет позиции («духовка + варочная + вытяжка»), а бот собирает комплект
-из ОДНОГО бренда пяти брендов проекта и СТРОГО одного цвета: по каждой позиции берёт
-лучший товар бренда нужного цвета (детерминированный `ProductSelector`), считает
-выгоду акции комплекта через `combo_pricing.best_combo` и выбирает бренд с лучшим
-сочетанием покрытие → выгода → цена. Комплект гарантированно единого цвета/финиша
-(перебираем цвета бренда, берём лучший одноцветный набор). Политика «нет идеального
-→ ближайшее»: бренд/цвет с неполным покрытием тоже рассматривается, но покрытие
-приоритетнее всего.
+из ОДНОГО бренда пяти брендов проекта и в СОЧЕТАЮЩИХСЯ цветах: по каждой позиции
+берёт лучший товар бренда, чей цвет входит в одну цветовую ГРУППУ (тёмная+сталь /
+светлая+сталь — см. `_COLOR_GROUPS`), считает выгоду акции через
+`combo_pricing.best_combo` и выбирает бренд с лучшим сочетанием покрытие → выгода →
+цена. Так комплект визуально согласован (нержавейка/серый — нейтральные мостики,
+сочетаются и с тёмным, и со светлым), но тёмное со светлым не смешивается. Политика
+«нет идеального → ближайшее»: бренд/группа с неполным покрытием тоже рассматривается,
+но покрытие приоритетнее всего.
 
 Ядро чистое: на вход — уже собранные кандидаты по позициям (из каталога/кэша),
 поставщик кампаний бренда и оцифровщик подарка. Интеграцию с реальным каталогом,
@@ -66,6 +67,29 @@ def _brand_of(product: CatalogProduct, brand: str) -> bool:
     return b in (product.title or "").lower() or b in (product.brand or "").lower()
 
 
+# Группы сочетающихся цветов (канонические цвета из selector._COLOR_TOKENS).
+# Нержавейка и серый — нейтральные «мостики»: входят в обе группы. Тёмное и
+# светлое между собой не смешиваем. Правь этот список, чтобы менять сочетаемость.
+_COLOR_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"чёрный", "графит", "серый", "нержавейка"}),   # тёмная гамма + сталь
+    frozenset({"белый", "бежевый", "серый", "нержавейка"}),   # светлая гамма + сталь
+)
+
+
+def _palette_note(products: list[CatalogProduct]) -> str:
+    """Пометка о цвете комплекта: единый цвет или перечень сочетающихся цветов."""
+    colors: list[str] = []
+    for p in products:
+        for c in sorted(_product_colors(p)):
+            if c not in colors:
+                colors.append(c)
+    if not colors:
+        return "Цвет комплекта уточнит менеджер."
+    if len(colors) == 1:
+        return f"Единый цвет комплекта: {colors[0]}."
+    return "Сочетающиеся цвета: " + ", ".join(colors) + "."
+
+
 def _design_consistency(products: list[CatalogProduct]) -> tuple[bool, str]:
     """Оценить визуальную сочетаемость комплекта по цвету/финишу.
 
@@ -91,9 +115,13 @@ def _design_consistency(products: list[CatalogProduct]) -> tuple[bool, str]:
 
 def _finalize_kit(
     brand: str, specs: list[ProductSpec], items: list[MatchedItem],
-    campaigns: list, gift_value: object | None, color: str | None,
+    campaigns: list, gift_value: object | None, *, colored: bool,
 ) -> BrandKit:
-    """Досчитать комплект по готовому набору позиций: выгода акции + пометка цвета."""
+    """Досчитать комплект по готовому набору позиций: выгода акции + пометка цвета.
+
+    colored=True — набор собран по цветовой группе (цвета согласованы), пометку
+    строим из фактических цветов; иначе — мягкая эвристика _design_consistency.
+    """
     selection = SelectionResult(items=items)
     matched = selection.matched
     combo_items = [
@@ -106,8 +134,8 @@ def _finalize_kit(
         for m in matched
     ]
     combo = best_combo(combo_items, campaigns, gift_value)
-    if color and matched:
-        consistent, note = True, f"Единый цвет комплекта: {color}."
+    if colored and matched:
+        consistent, note = True, _palette_note([m.product for m in matched])
     else:
         consistent, note = _design_consistency([m.product for m in matched])
     return BrandKit(
@@ -143,38 +171,32 @@ def build_brand_kit(
         brand_cands = [c for c in cands if _brand_of(c, brand)]
         ranked_per_spec.append(selector.ranked_candidates(spec, brand_cands))
 
-    # Палитра комплекта: канонические цвета, встречающиеся у товаров бренда.
-    palette: set[str] = set()
-    for ranked in ranked_per_spec:
-        for p in ranked:
-            palette |= _product_colors(p)
-
-    def assemble(color: str | None) -> list[MatchedItem]:
+    def assemble(group: frozenset[str] | None) -> list[MatchedItem]:
         items: list[MatchedItem] = []
         for spec, ranked in zip(specs, ranked_per_spec):
-            if color is None:
+            if group is None:
                 chosen = ranked[0] if ranked else None
             else:
-                chosen = next((p for p in ranked if color in _product_colors(p)), None)
+                chosen = next((p for p in ranked if _product_colors(p) & group), None)
             miss = (f"У бренда {brand} нет позиции"
-                    + (f" в цвете «{color}»" if color else "") + " под этот пункт")
+                    + (" в этой цветовой гамме" if group else "") + " под этот пункт")
             items.append(MatchedItem(
                 spec=spec, product=chosen, candidates_count=len(ranked),
                 reason="" if chosen else miss,
             ))
         return items
 
-    # Для каждого цвета — свой одноцветный комплект; берём лучший.
-    color_kits = [
-        _finalize_kit(brand, specs, assemble(color), campaigns, gift_value, color)
-        for color in sorted(palette)
+    # Для каждой цветовой ГРУППЫ — свой согласованный комплект; берём лучший.
+    group_kits = [
+        _finalize_kit(brand, specs, assemble(group), campaigns, gift_value, colored=True)
+        for group in _COLOR_GROUPS
     ]
-    color_kits = [k for k in color_kits if k.coverage > 0]
-    if color_kits:
-        return max(color_kits, key=lambda k: k.rank_key)
+    group_kits = [k for k in group_kits if k.coverage > 0]
+    if group_kits:
+        return max(group_kits, key=lambda k: k.rank_key)
 
     # Цвет не распознан ни у одного товара — комплект без цветовой гарантии.
-    return _finalize_kit(brand, specs, assemble(None), campaigns, gift_value, None)
+    return _finalize_kit(brand, specs, assemble(None), campaigns, gift_value, colored=False)
 
 
 def choose_best_kit(

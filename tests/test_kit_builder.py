@@ -117,8 +117,9 @@ def test_choose_best_kit_none_when_no_coverage():
     assert choose_best_kit(specs, cands, lambda b: []) is None
 
 
-def test_kit_is_strictly_single_color():
-    # У бренда есть и чёрные, и белые — комплект должен быть ОДНОГО цвета.
+def test_kit_colors_within_one_group():
+    # У бренда есть и чёрные, и белые — все позиции комплекта из ОДНОЙ цветовой группы.
+    from max_ekrom_bot.matching.kit_builder import _COLOR_GROUPS
     from max_ekrom_bot.matching.selector import _product_colors
 
     specs = [_spec(OVEN), _spec(COOKTOP)]
@@ -130,17 +131,37 @@ def test_kit_is_strictly_single_color():
     ]
     kit = build_brand_kit("Korting", specs, cands, [CASCADE])
     assert kit.coverage == 2 and kit.design_consistent is True
-    colorsets = [_product_colors(m.product) for m in kit.selection.matched]
-    assert set.intersection(*colorsets)  # есть общий цвет у всех позиций
-    assert "Единый цвет" in kit.design_note
+    colors: set = set()
+    for m in kit.selection.matched:
+        colors |= _product_colors(m.product)
+    assert any(colors <= g for g in _COLOR_GROUPS)  # цвета укладываются в одну группу
 
 
-def test_kit_never_mixes_colors_even_if_partial():
-    # Духовка только чёрная, панель только белая → не смешиваем: одноцветный, но неполный.
+def test_kit_combines_compatible_colors():
+    # Чёрный + нержавейка сочетаются (сталь — нейтральный мостик) → собираются вместе.
+    from max_ekrom_bot.matching.selector import _product_colors
+
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000, color="чёрный")],
+        [_p("Korting", "Варочная панель", 25000, color="нержавейка")],
+        [_p("Korting", "Вытяжка", 15000, color="чёрный")],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [CASCADE])
+    assert kit.coverage == 3
+    colors: set = set()
+    for m in kit.selection.matched:
+        colors |= _product_colors(m.product)
+    assert "нержавейка" in colors and "чёрный" in colors
+    assert "Сочетающиеся цвета" in kit.design_note
+
+
+def test_kit_never_mixes_incompatible_colors():
+    # Духовка только чёрная, панель только белая (разные группы) → не смешиваем.
     specs = [_spec(OVEN), _spec(COOKTOP)]
     cands = [
         [_p("Korting", "Духовой шкаф", 40000, color="чёрный")],
         [_p("Korting", "Варочная панель", 25000, color="белый")],
     ]
     kit = build_brand_kit("Korting", specs, cands, [CASCADE])
-    assert kit.coverage == 1  # взяли одну позицию, а не разноцветную пару
+    assert kit.coverage == 1  # взяли одну позицию, а не несочетаемую пару
