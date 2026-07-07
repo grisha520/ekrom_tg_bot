@@ -1,12 +1,13 @@
 """Движок сборки комплекта одного бренда (Ф4 проекта комплектов).
 
 Клиент называет позиции («духовка + варочная + вытяжка»), а бот собирает комплект
-из ОДНОГО бренда пяти брендов проекта: по каждой позиции берёт лучший товар этого
-бренда (детерминированный `ProductSelector`), оценивает дизайн-совместимость
-(эвристика по цвету/финишу — бренд уже один), считает выгоду акции комплекта через
-`combo_pricing.best_combo` и выбирает бренд с лучшим сочетанием
-покрытие → дизайн → выгода → цена. Политика «нет идеального → ближайшее»: бренд с
-неполным покрытием тоже рассматривается, но покрытие приоритетнее всего.
+из ОДНОГО бренда пяти брендов проекта и СТРОГО одного цвета: по каждой позиции берёт
+лучший товар бренда нужного цвета (детерминированный `ProductSelector`), считает
+выгоду акции комплекта через `combo_pricing.best_combo` и выбирает бренд с лучшим
+сочетанием покрытие → выгода → цена. Комплект гарантированно единого цвета/финиша
+(перебираем цвета бренда, берём лучший одноцветный набор). Политика «нет идеального
+→ ближайшее»: бренд/цвет с неполным покрытием тоже рассматривается, но покрытие
+приоритетнее всего.
 
 Ядро чистое: на вход — уже собранные кандидаты по позициям (из каталога/кэша),
 поставщик кампаний бренда и оцифровщик подарка. Интеграцию с реальным каталогом,
@@ -88,32 +89,11 @@ def _design_consistency(products: list[CatalogProduct]) -> tuple[bool, str]:
     return False, "В комплекте разные цвета — уточните сочетание у менеджера."
 
 
-def build_brand_kit(
-    brand: str,
-    specs: list[ProductSpec],
-    candidates_per_spec: list[list[CatalogProduct]],
-    campaigns: list,
-    *,
-    selector: ProductSelector | None = None,
-    gift_value: object | None = None,
+def _finalize_kit(
+    brand: str, specs: list[ProductSpec], items: list[MatchedItem],
+    campaigns: list, gift_value: object | None, color: str | None,
 ) -> BrandKit:
-    """Собрать комплект бренда: по каждой позиции — лучший товар этого бренда.
-
-    candidates_per_spec[i] — кандидаты под specs[i] (любых брендов); отбираем из
-    них товары `brand` и ранжируем селектором. campaigns — акции бренда (из
-    `PromoStore.campaigns_for_brand`). gift_value — оцифровщик подарка (или None).
-    """
-    selector = selector or ProductSelector()
-    items: list[MatchedItem] = []
-    for spec, cands in zip(specs, candidates_per_spec):
-        brand_cands = [c for c in cands if _brand_of(c, brand)]
-        ranked = selector.ranked_candidates(spec, brand_cands)
-        chosen = ranked[0] if ranked else None
-        items.append(MatchedItem(
-            spec=spec, product=chosen, candidates_count=len(brand_cands),
-            reason="" if chosen else f"У бренда {brand} нет подходящего под эту позицию",
-        ))
-
+    """Досчитать комплект по готовому набору позиций: выгода акции + пометка цвета."""
     selection = SelectionResult(items=items)
     matched = selection.matched
     combo_items = [
@@ -126,12 +106,75 @@ def build_brand_kit(
         for m in matched
     ]
     combo = best_combo(combo_items, campaigns, gift_value)
-    consistent, note = _design_consistency([m.product for m in matched])
+    if color and matched:
+        consistent, note = True, f"Единый цвет комплекта: {color}."
+    else:
+        consistent, note = _design_consistency([m.product for m in matched])
     return BrandKit(
         brand=brand, selection=selection, combo=combo,
         requested=len(specs), coverage=len(matched),
         design_consistent=consistent, design_note=note,
     )
+
+
+def build_brand_kit(
+    brand: str,
+    specs: list[ProductSpec],
+    candidates_per_spec: list[list[CatalogProduct]],
+    campaigns: list,
+    *,
+    selector: ProductSelector | None = None,
+    gift_value: object | None = None,
+) -> BrandKit:
+    """Собрать комплект бренда СТРОГО одного цвета.
+
+    По каждой позиции ранжируем товары бренда, затем для каждого доступного цвета
+    (канонический — «чёрный»/«белый»/«нержавейка»/…) собираем набор, где ВСЕ позиции
+    этого цвета, и берём лучший по покрытие→выгода→цена. Так комплект всегда единого
+    цвета/финиша. Если цвет ни у кого не распознан — собираем без цветовой гарантии
+    (с пометкой, что цвет уточнит менеджер).
+
+    candidates_per_spec[i] — кандидаты под specs[i] (любых брендов); отбираем товары
+    `brand`. campaigns — акции бренда. gift_value — оцифровщик подарка (или None).
+    """
+    selector = selector or ProductSelector()
+    ranked_per_spec: list[list[CatalogProduct]] = []
+    for spec, cands in zip(specs, candidates_per_spec):
+        brand_cands = [c for c in cands if _brand_of(c, brand)]
+        ranked_per_spec.append(selector.ranked_candidates(spec, brand_cands))
+
+    # Палитра комплекта: канонические цвета, встречающиеся у товаров бренда.
+    palette: set[str] = set()
+    for ranked in ranked_per_spec:
+        for p in ranked:
+            palette |= _product_colors(p)
+
+    def assemble(color: str | None) -> list[MatchedItem]:
+        items: list[MatchedItem] = []
+        for spec, ranked in zip(specs, ranked_per_spec):
+            if color is None:
+                chosen = ranked[0] if ranked else None
+            else:
+                chosen = next((p for p in ranked if color in _product_colors(p)), None)
+            miss = (f"У бренда {brand} нет позиции"
+                    + (f" в цвете «{color}»" if color else "") + " под этот пункт")
+            items.append(MatchedItem(
+                spec=spec, product=chosen, candidates_count=len(ranked),
+                reason="" if chosen else miss,
+            ))
+        return items
+
+    # Для каждого цвета — свой одноцветный комплект; берём лучший.
+    color_kits = [
+        _finalize_kit(brand, specs, assemble(color), campaigns, gift_value, color)
+        for color in sorted(palette)
+    ]
+    color_kits = [k for k in color_kits if k.coverage > 0]
+    if color_kits:
+        return max(color_kits, key=lambda k: k.rank_key)
+
+    # Цвет не распознан ни у одного товара — комплект без цветовой гарантии.
+    return _finalize_kit(brand, specs, assemble(None), campaigns, gift_value, None)
 
 
 def choose_best_kit(

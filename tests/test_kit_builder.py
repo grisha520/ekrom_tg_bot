@@ -115,3 +115,32 @@ def test_choose_best_kit_none_when_no_coverage():
     specs = [_spec(OVEN)]
     cands = [[_p("Bosch", "Духовой шкаф", 30000)]]  # не наш бренд
     assert choose_best_kit(specs, cands, lambda b: []) is None
+
+
+def test_kit_is_strictly_single_color():
+    # У бренда есть и чёрные, и белые — комплект должен быть ОДНОГО цвета.
+    from max_ekrom_bot.matching.selector import _product_colors
+
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000, color="чёрный"),
+         _p("Korting", "Духовой шкаф", 38000, color="белый")],
+        [_p("Korting", "Варочная панель", 25000, color="белый"),
+         _p("Korting", "Варочная панель", 26000, color="чёрный")],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [CASCADE])
+    assert kit.coverage == 2 and kit.design_consistent is True
+    colorsets = [_product_colors(m.product) for m in kit.selection.matched]
+    assert set.intersection(*colorsets)  # есть общий цвет у всех позиций
+    assert "Единый цвет" in kit.design_note
+
+
+def test_kit_never_mixes_colors_even_if_partial():
+    # Духовка только чёрная, панель только белая → не смешиваем: одноцветный, но неполный.
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000, color="чёрный")],
+        [_p("Korting", "Варочная панель", 25000, color="белый")],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [CASCADE])
+    assert kit.coverage == 1  # взяли одну позицию, а не разноцветную пару
