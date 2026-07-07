@@ -70,6 +70,20 @@ class PromoItem:
 
 
 @dataclass
+class GiftRule:
+    """Оцифрованное условие подарочной акции (для сравнения со скидками).
+
+    condition — по какому порогу даётся подарок: «sum» (сумма покупки, руб) или
+    «count» (число позиций из разных категорий). options — порог → ключ модели
+    подарка для поиска в каталоге (напр. {10000: "KWK 0902"}). Оцифровываем только
+    чёткие механики; «на выбор»/«спец-цена»/баннерные без текста → None (менеджер).
+    """
+
+    condition: str                 # "sum" | "count"
+    options: dict[int, str]         # порог → ключ модели подарка
+
+
+@dataclass
 class PromoCampaign:
     """Кампания раздела «Акции» с разобранными правилами и витринными участниками."""
 
@@ -84,6 +98,7 @@ class PromoCampaign:
     rules_text: str = ""
     tiers: dict[int, float] = field(default_factory=dict)  # кол-во позиций → % скидки
     requires_oven: bool = False          # правило «в комплекте обязателен духовой шкаф»
+    gift: GiftRule | None = None         # оцифрованное условие подарка (для механики gift)
     items: list[PromoItem] = field(default_factory=list)
 
 
@@ -181,6 +196,46 @@ def parse_tiers(rules: str) -> dict[int, float]:
         if n and 2 <= n <= 7:
             count_first.setdefault(n, float(m.group(2)))
     return count_first or percent_first
+
+
+# Ключ модели товара ekrom: латинский код с цифрой («KWK 0902», «MID45»). Берём
+# первый кодовый токен + следующий числовой — этого хватает для LIKE-поиска в каталоге.
+_MODEL = r"[A-Z]{2,}\d*(?:\s\d+)?"
+
+
+def parse_gift(rules: str) -> "GiftRule | None":
+    """Оцифровать условие подарка из текста правил (или None — оставить менеджеру).
+
+    Распознаём два чётких шаблона:
+      • по сумме: «при покупке … на сумму <N> руб … в подарок <МОДЕЛЬ>»;
+      • по числу позиций: «<МОДЕЛЬ> … в подарок … при покупке <N> приборов».
+    «На выбор»/«или спец-цена»/баннерные без текста НЕ оцифровываем (слишком
+    вариативно → правило заказчика «не считать неверно»).
+    """
+    if not rules:
+        return None
+    low = rules.lower()
+    if "на выбор" in low or "спец цен" in low or "спец. цен" in low:
+        return None
+
+    # По сумме покупки (может быть несколько порогов).
+    sum_opts: dict[int, str] = {}
+    for m in re.finditer(r"на сумму\s*([\d ]+?)\s*руб.*?(" + _MODEL + r")", rules, re.S):
+        thr = int(re.sub(r"\D", "", m.group(1)) or 0)
+        model = _RE_WS.sub(" ", m.group(2)).strip()
+        if thr and model:
+            sum_opts[thr] = model
+    if sum_opts:
+        return GiftRule("sum", sum_opts)
+
+    # По числу позиций: модель перед «в подарок», порог — «при покупке N».
+    m = re.search(r"(" + _MODEL + r")[^.]{0,80}?в подарок[^.]{0,80}?при покупке\s*(\d)", rules, re.S)
+    if m:
+        return GiftRule("count", {int(m.group(2)): _RE_WS.sub(" ", m.group(1)).strip()})
+    m = re.search(r"при покупке\s*(\d)[^.]{0,120}?(" + _MODEL + r")[^.]{0,40}?в подарок", rules, re.S)
+    if m:
+        return GiftRule("count", {int(m.group(1)): _RE_WS.sub(" ", m.group(2)).strip()})
+    return None
 
 
 def classify_mechanic(title: str, rules: str) -> str:
@@ -288,6 +343,7 @@ def parse_campaign(
         tiers=parse_tiers(rules),
         requires_oven=bool(re.search(r"обязательн\w*\s+наличие\s+духов", low_rules)
                            or re.search(r"духов\w+\s+шкаф\w*\s+должен", low_rules)),
+        gift=parse_gift(rules) if mechanic == PromoMechanic.GIFT else None,
         items=items,
     )
 

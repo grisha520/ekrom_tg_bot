@@ -7,11 +7,13 @@
 from __future__ import annotations
 
 from max_ekrom_bot.ekrom.promos import (
+    GiftRule,
     PromoMechanic,
     brand_from_text,
     classify_mechanic,
     parse_campaign,
     parse_campaign_items,
+    parse_gift,
     parse_period,
     parse_tiers,
     parse_top_index,
@@ -87,6 +89,52 @@ def test_parse_tiers_flat_starting_at_three():
 
 def test_parse_tiers_none_for_gift():
     assert parse_tiers("При покупке приборов на сумму 10 000 руб. в подарок чайник") == {}
+
+
+GIFT_SUM = (
+    "3. Подарки предоставляются: a) при покупке приборов на сумму 10 000 руб. – в подарок "
+    "предоставляется стеклянный чайник KWK 0902 G ; b) при покупке приборов на сумму 25 000 "
+    "руб. – в подарок предоставляется погружной блендер KHB 0315 W Tulip ; с) при покупке "
+    "приборов на сумму 50 000 руб. – в подарок предоставляется кофеварка KCM 1005 T Arte ."
+)
+GIFT_COUNT = (
+    "Механика: Встраиваемые посудомоечные машины MID45S100I или 60S100I в подарок при покупке "
+    "4-х приборов из разных товарных групп техники Midea. Духовой шкаф должен быть в комплекте."
+)
+GIFT_CHOICE = (
+    "Подарок или специальная цена на выбор: При покупке комплекта из 3-х предметов в подарок "
+    "на выбор предоставляется КА-00033464 Посудомоечная машина MAUNFELD MLP45530M."
+)
+
+
+def test_parse_gift_sum_thresholds():
+    g = parse_gift(GIFT_SUM)
+    assert isinstance(g, GiftRule)
+    assert g.condition == "sum"
+    assert g.options == {10000: "KWK 0902", 25000: "KHB 0315", 50000: "KCM 1005"}
+
+
+def test_parse_gift_count_threshold():
+    g = parse_gift(GIFT_COUNT)
+    assert g.condition == "count"
+    assert g.options == {4: "MID45"}
+
+
+def test_parse_gift_choice_is_not_digitized():
+    # «на выбор»/«спец цена» — слишком вариативно, оставляем менеджеру.
+    assert parse_gift(GIFT_CHOICE) is None
+
+
+def test_parse_gift_empty_banner():
+    assert parse_gift("") is None
+    assert parse_gift("Korting раздаёт подарки!") is None  # баннер без условий
+
+
+def test_parse_campaign_sets_gift_only_for_gift_mechanic():
+    html = _campaign_html("", h1="Korting: Покупка это подарок!", rules=GIFT_SUM)
+    camp = parse_campaign(html, "korting_mbt_v_podarok", BASE)
+    assert camp.mechanic == PromoMechanic.GIFT
+    assert camp.gift and camp.gift.condition == "sum"
 
 
 def test_parse_period_variants():
@@ -185,6 +233,25 @@ def test_promo_store_roundtrip(tmp_path):
     assert store.brand_counts() == {"Korting": 1}
 
 
+def test_promo_store_gift_roundtrip(tmp_path):
+    # Оцифрованное условие подарка сохраняется и читается обратно как dict.
+    html = _campaign_html("", h1="Korting: Покупка это подарок!", rules=GIFT_SUM)
+    camp = parse_campaign(html, "korting_mbt_v_podarok", BASE)
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([camp])
+    row = store.campaigns_for_brand("Korting")[0]
+    assert row["gift"] == {"condition": "sum",
+                           "options": {10000: "KWK 0902", 25000: "KHB 0315", 50000: "KCM 1005"}}
+
+
+def test_promo_store_gift_none_for_non_gift(tmp_path):
+    html = _campaign_html("", h1='Korting: "Каскадные скидки"', rules=KORTING_CASCADE)
+    camp = parse_campaign(html, "korting_cascade", BASE)
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([camp])
+    assert store.campaigns_for_brand("Korting")[0]["gift"] is None
+
+
 def test_promo_store_replace_all_is_idempotent(tmp_path):
     cards = _CARD.format(pid="1", href="/products/a/", title="A", price="1 ₽", old="")
     camp = parse_campaign(_campaign_html(cards, h1="X"), "s", BASE)
@@ -192,3 +259,21 @@ def test_promo_store_replace_all_is_idempotent(tmp_path):
     store.replace_all([camp])
     store.replace_all([camp])  # повторный прогон не дублирует
     assert store.count() == 1
+
+
+def test_promo_store_migrates_missing_gift_column(tmp_path):
+    # БД прошлой версии без gift_json — PromoStore должен добить столбец на месте.
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as c:
+        c.execute(
+            "CREATE TABLE promo_campaigns (slug TEXT PRIMARY KEY, url TEXT, title TEXT, "
+            "brand TEXT, mechanic TEXT, period_from TEXT, period_to TEXT, scope TEXT, "
+            "requires_oven INTEGER, tiers TEXT, rules_text TEXT, updated_at REAL)"
+        )
+    html = _campaign_html("", h1="Korting: Покупка это подарок!", rules=GIFT_SUM)
+    camp = parse_campaign(html, "korting_mbt_v_podarok", BASE)
+    store = PromoStore(db)  # миграция при инициализации
+    store.replace_all([camp])
+    assert store.campaigns_for_brand("Korting")[0]["gift"]["condition"] == "sum"

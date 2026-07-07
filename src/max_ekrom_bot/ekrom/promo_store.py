@@ -14,7 +14,26 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .promos import PromoCampaign, PromoItem
+from .promos import GiftRule, PromoCampaign, PromoItem
+
+
+def _gift_json(gift: GiftRule | None) -> str | None:
+    """Сериализовать оцифрованное условие подарка (или None)."""
+    if gift is None:
+        return None
+    return json.dumps(
+        {"condition": gift.condition, "options": {str(k): v for k, v in gift.options.items()}},
+        ensure_ascii=False,
+    )
+
+
+def _gift_from_json(raw: str | None) -> dict | None:
+    """Разобрать gift_json обратно в {condition, options:{int:model}} (или None)."""
+    if not raw:
+        return None
+    d = json.loads(raw)
+    return {"condition": d.get("condition"),
+            "options": {int(k): v for k, v in (d.get("options") or {}).items()}}
 
 
 class PromoStore:
@@ -43,6 +62,7 @@ class PromoStore:
                     scope TEXT,
                     requires_oven INTEGER,
                     tiers TEXT,
+                    gift_json TEXT,
                     rules_text TEXT,
                     updated_at REAL
                 )"""
@@ -59,6 +79,11 @@ class PromoStore:
                     PRIMARY KEY (slug, url)
                 )"""
             )
+            # Миграция: столбец подарка мог отсутствовать в БД прошлой версии
+            # (CREATE IF NOT EXISTS схему не меняет) — добавляем на месте.
+            cols = {r[1] for r in c.execute("PRAGMA table_info(promo_campaigns)")}
+            if "gift_json" not in cols:
+                c.execute("ALTER TABLE promo_campaigns ADD COLUMN gift_json TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_promo_brand ON promo_campaigns(brand)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_promo_items_slug ON promo_items(slug)")
 
@@ -71,14 +96,15 @@ class PromoStore:
             c.executemany(
                 """INSERT INTO promo_campaigns
                    (slug,url,title,brand,mechanic,period_from,period_to,scope,
-                    requires_oven,tiers,rules_text,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    requires_oven,tiers,gift_json,rules_text,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [
                     (
                         camp.slug, camp.url, camp.title, camp.brand, camp.mechanic,
                         camp.period_from, camp.period_to, camp.scope,
                         1 if camp.requires_oven else 0,
                         json.dumps({str(k): v for k, v in camp.tiers.items()}, ensure_ascii=False),
+                        _gift_json(camp.gift),
                         camp.rules_text, now,
                     )
                     for camp in campaigns
@@ -111,6 +137,7 @@ class PromoStore:
             d = dict(r)
             d["tiers"] = {int(k): v for k, v in json.loads(d.get("tiers") or "{}").items()}
             d["requires_oven"] = bool(d.get("requires_oven"))
+            d["gift"] = _gift_from_json(d.get("gift_json"))
             out.append(d)
         return out
 

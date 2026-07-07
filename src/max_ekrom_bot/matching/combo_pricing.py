@@ -172,6 +172,40 @@ def best_combo(
     return review[0] if review else compute_combo(items, None)
 
 
+def make_gift_valuer(catalog_lookup: object):
+    """Собрать оцифровщик подарка для `compute_combo`/`best_combo`.
+
+    `catalog_lookup(model) → (название, цена) | None` — поиск подарка в каталоге по
+    ключу модели (напр. `CatalogCache.find_by_model`). Возвращает callable(campaign,
+    items) → (название, цена) | None, пригодный как аргумент `gift_value`.
+
+    Условие подарка берётся из `campaign.gift` (оцифровано на Ф1: sum/count + пороги
+    → модель). Проверяем порог (сумма комплекта / число разных категорий) и, для
+    акций с обязательным духовым шкафом, его наличие. Не выполнено/не нашли цену → None.
+    """
+    def valuer(campaign: object, items: list[ComboItem]):
+        gift = _get(campaign, "gift", None)
+        if not gift:
+            return None
+        cond = gift["condition"] if isinstance(gift, dict) else gift.condition
+        opts = gift["options"] if isinstance(gift, dict) else gift.options
+        if not opts:
+            return None
+        if bool(_get(campaign, "requires_oven", False)) and not any(i.is_oven for i in items):
+            return None
+        metric = (round(sum(i.price for i in items), 2) if cond == "sum"
+                  else len({i.category for i in items}))
+        eligible = [thr for thr in opts if metric >= thr]
+        if not eligible:
+            return None
+        found = catalog_lookup(opts[max(eligible)])
+        if not found or not found[1]:
+            return None
+        return found[0], float(found[1])
+
+    return valuer
+
+
 def _pct(v: float) -> str:
     """Процент без хвостовых нулей (25.0 → «25», 12.5 → «12.5»)."""
     return f"{v:g}"

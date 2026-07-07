@@ -93,6 +93,20 @@ def test_urls_without_attributes_and_count(tmp_path):
     assert cache.attributes_count() == 1
 
 
+def test_find_by_model(tmp_path):
+    # Поиск подарка по ключу модели: подстрока названия, самый дешёвый с ценой.
+    cache = CatalogCache(tmp_path / "c.db")
+    cache.upsert_many([
+        _p("g1", "Чайник Korting KWK 0902 G", 3990),
+        _p("g2", "Чайник Korting KWK 0902 G (уценка)", 2990),
+        _p("g3", "Блендер Korting KHB 0315 W Tulip", 5490),
+    ], CAT)
+    assert cache.find_by_model("KWK 0902") == ("Чайник Korting KWK 0902 G (уценка)", 2990.0)
+    assert cache.find_by_model("KHB 0315")[1] == 5490.0
+    assert cache.find_by_model("NOPE 000") is None
+    assert cache.find_by_model("") is None
+
+
 def test_parse_attributes_from_html():
     from max_ekrom_bot.ekrom.crawler import _parse_attributes
 

@@ -149,6 +149,23 @@ class CatalogCache:
         with self._conn() as c:
             return c.execute("SELECT COUNT(*) FROM products").fetchone()[0]
 
+    def find_by_model(self, model: str) -> tuple[str, float] | None:
+        """Найти товар по ключу модели (для оцифровки подарка) → (название, цена).
+
+        Ключ модели («KWK 0902», «MID45») ищем как подстроку названия. Берём самый
+        дешёвый с ценой (базовая гарантированная выгода подарка). None — не нашли/нет цены.
+        """
+        key = (model or "").strip()
+        if not key:
+            return None
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT title, price FROM products "
+                "WHERE title LIKE ? AND price IS NOT NULL ORDER BY price ASC LIMIT 1",
+                (f"%{key}%",),
+            ).fetchone()
+        return (row[0], float(row[1])) if row else None
+
     def urls_without_attributes(self) -> list[str]:
         """URL товаров, у которых ещё нет характеристик — для инкрементального
         обогащения краулером (уже обогащённые не трогаем при повторных прогонах)."""

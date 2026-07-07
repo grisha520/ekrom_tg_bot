@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-from max_ekrom_bot.matching.combo_pricing import ComboItem, best_combo, compute_combo
+from max_ekrom_bot.matching.combo_pricing import (
+    ComboItem, best_combo, compute_combo, make_gift_valuer,
+)
 
 
 class _Camp:
     """Лёгкая заглушка кампании (как PromoCampaign / строка PromoStore)."""
 
-    def __init__(self, mechanic, tiers=None, requires_oven=False, slug=None):
+    def __init__(self, mechanic, tiers=None, requires_oven=False, slug=None, gift=None):
         self.mechanic = mechanic
         self.tiers = tiers or {}
         self.requires_oven = requires_oven
         self.slug = slug or mechanic
+        self.gift = gift  # {"condition": "sum"|"count", "options": {порог: модель}}
 
 
 def _oven(price):
@@ -193,3 +196,62 @@ def test_best_combo_no_campaigns_is_price_list():
     best = best_combo([_oven(40000), _cooktop(20000)], [])
     assert best.mechanic == "none" and best.applied is False
     assert best.final_total == 60000.0
+
+
+# ── make_gift_valuer: оцифровка подарка из условия + каталога ─────────────────
+
+_CATALOG = {
+    "KWK 0902": ("Чайник Korting KWK 0902 G", 3990),
+    "KHB 0315": ("Блендер Korting KHB 0315 W Tulip", 5490),
+    "KCM 1005": ("Кофеварка Korting KCM 1005 T Arte", 8990),
+    "MID45": ("Посудомоечная машина Midea MID45S100I", 27990),
+}
+_lookup = _CATALOG.get
+
+
+def test_gift_valuer_sum_picks_highest_reached_threshold():
+    valuer = make_gift_valuer(_lookup)
+    gift = {"condition": "sum", "options": {10000: "KWK 0902", 25000: "KHB 0315", 50000: "KCM 1005"}}
+    camp = _Camp("gift", gift=gift, slug="korting_mbt")
+    # Сумма 60000 ≥ 50000 → подарок наибольшего достигнутого порога (кофеварка).
+    r = compute_combo([_oven(40000), _cooktop(20000)], camp, gift_value=valuer)
+    assert r.applied and r.gift_title == "Кофеварка Korting KCM 1005 T Arte"
+    assert r.discount_total == 8990.0 and r.final_total == 60000.0
+
+
+def test_gift_valuer_sum_below_threshold_none():
+    valuer = make_gift_valuer(_lookup)
+    gift = {"condition": "sum", "options": {50000: "KCM 1005"}}
+    r = compute_combo([_cooktop(20000), _hood(15000)], _Camp("gift", gift=gift), gift_value=valuer)
+    assert r.manager_review is True and r.applied is False  # 35000 < 50000
+
+
+def test_gift_valuer_count_requires_oven():
+    valuer = make_gift_valuer(_lookup)
+    gift = {"condition": "count", "options": {4: "MID45"}}
+    camp = _Camp("gift", requires_oven=True, gift=gift, slug="midea_pmm")
+    four = [_oven(40000), _cooktop(20000), _hood(15000), ComboItem("ПММ", 30000, "dishwasher")]
+    r = compute_combo(four, camp, gift_value=valuer)
+    assert r.applied and r.discount_total == 27990.0
+    # Тот же набор без духовки — подарок не даётся.
+    no_oven = [_cooktop(20000), _hood(15000), ComboItem("ПММ", 30000, "dishwasher"),
+               ComboItem("СВЧ", 12000, "microwave")]
+    r2 = compute_combo(no_oven, camp, gift_value=valuer)
+    assert r2.applied is False and r2.manager_review is True
+
+
+def test_gift_valuer_model_not_in_catalog_none():
+    valuer = make_gift_valuer(_lookup)
+    gift = {"condition": "sum", "options": {10000: "UNKNOWN 999"}}
+    r = compute_combo([_oven(40000)], _Camp("gift", gift=gift), gift_value=valuer)
+    assert r.manager_review is True
+
+
+def test_best_combo_with_real_gift_valuer_vs_discount():
+    # Бренд: каскад −25% на наименьший (20000→5000) vs подарок-кофеварка 8990. Подарок выгоднее.
+    valuer = make_gift_valuer(_lookup)
+    items = [_oven(40000), _cooktop(20000)]
+    cascade = _Camp("cascade_cheapest", {2: 25}, slug="cascade")
+    gift = _Camp("gift", gift={"condition": "sum", "options": {50000: "KCM 1005"}}, slug="mbt")
+    best = best_combo(items, [cascade, gift], gift_value=valuer)
+    assert best.campaign_slug == "mbt" and best.discount_total == 8990.0
