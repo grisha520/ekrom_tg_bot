@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from reportlab.lib import colors
@@ -33,6 +34,9 @@ from reportlab.platypus import (
 
 from ..models import SelectionResult
 from .offer import _fetch_image, _register_font, _FONT, _FONT_BOLD
+
+if TYPE_CHECKING:
+    from ..matching.combo_pricing import ComboResult
 
 _INK = colors.HexColor("#1a1a1a")
 _MUTED = colors.HexColor("#777777")
@@ -110,16 +114,21 @@ def _product_block(item, st) -> KeepTogether:
     art = _attr(p, "артикул")
     title_line = f"{title}" + (f" ({_html.escape(art)})" if art else "")
 
-    right: list = [Paragraph(title_line, st["title"]), Spacer(1, 1.5 * mm),
-                   Paragraph("Характеристики", st["h"]), Spacer(1, 0.8 * mm)]
-    ct = Table(_char_rows(p, st), colWidths=[42 * mm, 58 * mm])
-    ct.setStyle(TableStyle([
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 0.6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.6),
-        ("LEFTPADDING", (0, 0), (-1, -1), 0),
-    ]))
-    right.append(ct)
+    right: list = [Paragraph(title_line, st["title"]), Spacer(1, 1.5 * mm)]
+    # Блок «Характеристики» рисуем только если они есть: reportlab падает на
+    # Table([]) («must have at least a row»), а у товара без обогащения атрибутов нет.
+    char_rows = _char_rows(p, st)
+    if char_rows:
+        right.append(Paragraph("Характеристики", st["h"]))
+        right.append(Spacer(1, 0.8 * mm))
+        ct = Table(char_rows, colWidths=[42 * mm, 58 * mm])
+        ct.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 0.6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        right.append(ct)
 
     # Цена (со скидкой если есть).
     right.append(Spacer(1, 1.5 * mm))
@@ -165,11 +174,15 @@ def _product_block(item, st) -> KeepTogether:
 def build_cart_style_pdf(
     selection: SelectionResult, settings, out_path: str | Path | None = None,
     combo_discount_pct: float | None = None, promo_note: str | None = None,
+    combo: "ComboResult | None" = None,
 ) -> Path:
     """Собрать PDF-комплект в стиле корзины ekrom.
 
-    combo_discount_pct — комплектная скидка (%), если считаем итог. promo_note —
-    текст про акцию, если итог не считаем.
+    combo — результат движка расчёта (`matching.combo_pricing.compute_combo`): даёт
+    подытог, размер скидки (плоский % ИЛИ рубли на наименьший товар при каскаде),
+    пометку и флаг «итог уточнит менеджер». Если передан — он ведёт блок «Итого».
+    combo_discount_pct/promo_note — легаси-путь (единый % и текст), когда движок не
+    используется.
     """
     _register_font(getattr(settings, "pdf_font_path", "") or "")
     st = _styles()
@@ -198,14 +211,31 @@ def build_cart_style_pdf(
     story.append(Spacer(1, 4 * mm))
     story.append(Paragraph("Итого", st["big"]))
     story.append(Spacer(1, 2 * mm))
-    rows = [[Paragraph("Сумма без скидки", st["total_l"]), Paragraph(_fmt(subtotal), st["total_v"])]]
-    if combo_discount_pct:
+
+    # Скидку/пометку берём из движка (combo), иначе — из легаси-параметров.
+    disc_amount = 0.0
+    disc_label: str | None = None
+    note = promo_note
+    manager_review = False
+    if combo is not None:
+        subtotal = combo.subtotal
+        note = combo.note or promo_note
+        manager_review = combo.manager_review
+        if combo.applied:
+            disc_amount = combo.discount_total
+            disc_label = (
+                f"Скидка на комплект −{combo.combo_discount_pct:g}%"
+                if combo.combo_discount_pct else "Скидка на комплект по акции"
+            )
+    elif combo_discount_pct:
         disc_amount = subtotal * combo_discount_pct / 100
-        rows.append([Paragraph(f"Скидка на комплект −{combo_discount_pct:.2f}%".rstrip("0").rstrip("."), st["total_l"]),
+        disc_label = f"Скидка на комплект −{combo_discount_pct:.2f}%".rstrip("0").rstrip(".")
+
+    rows = [[Paragraph("Сумма без скидки", st["total_l"]), Paragraph(_fmt(subtotal), st["total_v"])]]
+    if disc_label and disc_amount:
+        rows.append([Paragraph(disc_label, st["total_l"]),
                      Paragraph("−" + _fmt(disc_amount), st["total_v"])])
-        final = subtotal - disc_amount
-    else:
-        final = subtotal
+    final = subtotal - disc_amount
     tt = Table(rows, colWidths=[130 * mm, 50 * mm])
     tt.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))
     story.append(tt)
@@ -214,9 +244,15 @@ def build_cart_style_pdf(
                     colWidths=[130 * mm, 50 * mm])
     final_t.setStyle(TableStyle([("LINEABOVE", (0, 0), (-1, 0), 1, _INK), ("TOPPADDING", (0, 0), (-1, -1), 4), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
     story.append(final_t)
-    if promo_note:
+    if note:
         story.append(Spacer(1, 1 * mm))
-        story.append(Paragraph(promo_note, st["sub"]))
+        story.append(Paragraph(note, st["sub"]))
+    if manager_review:
+        story.append(Spacer(1, 0.5 * mm))
+        story.append(Paragraph(
+            "Итоговая цена комплекта по этой акции — после подтверждения менеджером.",
+            st["sub"],
+        ))
     story.append(Paragraph(f"Предложение актуально на {datetime.now():%d.%m.%Y}", st["box"]))
 
     # Сервис + менеджер + шоурумы (как в эталоне).
