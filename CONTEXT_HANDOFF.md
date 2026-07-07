@@ -132,6 +132,9 @@ Telegram-бот подбора техники **ekrom.ru**. Клиент пиш�
   реальными данными; добавить ссылки «Инструкция/Схема»; довести вёрстку по картинке эталона.
   Модель: `CatalogProduct.old_price/discount_pct`. Конфиг: `PDF_HEADER_PHONE/PDF_CITY/
   MANAGER_NAME/EMAIL/PHONE/CITY_PHONE`.
+- **Требования заказчика (07.07.26):** комплект собирается ТОЛЬКО из 5 брендов
+  (`kit_builder.TARGET_BRANDS`) и СТРОГО одного цвета (перебор цветов бренда → лучший
+  одноцветный набор; цвета не смешиваются даже при неполном покрытии).
 - **Ф4. Движок комплекта — ЯДРО СДЕЛАНО.** `matching/kit_builder.py`:
   `build_brand_kit(brand, specs, candidates_per_spec, campaigns, gift_value)` — по каждой
   позиции берёт лучший товар бренда (`ProductSelector`), считает выгоду через `best_combo`,
