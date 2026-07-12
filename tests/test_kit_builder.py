@@ -261,3 +261,25 @@ def test_client_brands_from_message():
         "Korting", "Maunfeld", "Midea", "Lex", "Kuppersberg",
     )
     assert client_brands([_spec(OVEN, brand="Midea")], "") == ("Midea",)
+
+
+def test_prefers_promo_gift_model_in_position():
+    # Подарочная модель ПММ предпочитается в позиции, даже если она дороже обычной.
+    gift_camp = {"mechanic": "gift", "requires_oven": False, "slug": "g", "tiers": {},
+                 "exclusions": [], "spec": None,
+                 "gift": {"condition": "count", "options": {2: "MID45S100I"}}}
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(ApplianceType.DISHWASHER)]
+    cands = [
+        [_p("Midea", "Духовой шкаф", 40000)],
+        [_p("Midea", "Варочная панель", 25000)],
+        [_p("Midea", "Посудомоечная машина MID45S100I", 30000),
+         _p("Midea", "Посудомоечная машина MID99X", 22000)],
+    ]
+    kit = build_brand_kit("Midea", specs, cands, [gift_camp])
+    assert "MID45S100I" in kit.selection.matched[2].product.title
+
+
+def test_choose_best_kit_none_when_all_foreign(tmp_path=None):
+    specs = [_spec(OVEN)]
+    cands = [[_p("Smeg", "Духовой шкаф", 90000)]]
+    assert choose_best_kit(specs, cands, lambda b: []) is None

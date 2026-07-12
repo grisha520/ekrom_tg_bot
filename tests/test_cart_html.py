@@ -61,3 +61,28 @@ def test_html_escapes_titles():
         title="Плита <b>A&B</b>", url="u", price=1000))])
     html = build_cart_html(sel, _S, None)
     assert "&lt;B&gt;A&amp;B" in html   # HTML-инъекция экранирована (заголовок uppercase)
+
+
+def test_html_gift_line_free():
+    combo = ComboResult(mechanic="gift", subtotal=60000, discount_total=5990,
+                        final_total=60000, applied=True, gift_title="Чайник Korting KWK 0902")
+    html = build_cart_html(_sel(), _S, combo)
+    assert "В подарок" in html and "бесплатно" in html and "KWK 0902" in html
+
+
+def test_html_without_combo_renders_price_list():
+    html = build_cart_html(_sel(), _S, None)
+    assert "Итого" in html and "Сумма со скидкой" in html
+
+
+def test_html_country_flags_rendered():
+    # У товаров страны Турция/Китай → круглые SVG-флаги (clip-path), а не эмодзи.
+    html = build_cart_html(_sel(), _S, None)
+    assert "clip-path" in html
+
+
+def test_html_zero_discount_shows_row():
+    # «Индивидуальная скидка 0 ₽» показывается всегда (как в оригинале корзины).
+    combo = ComboResult(mechanic="none", subtotal=85514, discount_total=0, final_total=85514)
+    html = build_cart_html(_sel(), _S, combo)
+    assert "Индивидуальная скидка" in html

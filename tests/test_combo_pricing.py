@@ -358,3 +358,64 @@ def test_best_combo_with_real_gift_valuer_vs_discount():
     gift = _Camp("gift", gift={"condition": "sum", "options": {50000: "KCM 1005"}}, slug="mbt")
     best = best_combo(items, [cascade, gift], gift_value=valuer)
     assert best.campaign_slug == "mbt" and best.discount_total == 8990.0
+
+
+# ── Краевые случаи механик (расширенное покрытие) ─────────────────────────────
+
+def test_spec_price_caps_at_top_tier():
+    # 5 участвующих предметов + холодильник → верхний тариф спеццены (27 000).
+    items = [_oven(45000), _cooktop(25000), _hood(15000),
+             ComboItem("ПММ", 40000, "dishwasher"),
+             ComboItem("СВЧ", 20000, "microwave"), _fridge(97281)]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied and r.discount_total == 97281 - 27000
+
+
+def test_spec_price_no_benefit_if_fridge_cheaper_than_fixed():
+    # Холодильник дешевле фикс-цены (30 000 < 40 000 при 3 предметах) → не применяем.
+    items = [_oven(45000), _cooktop(25000), _hood(15000), _fridge(30000)]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied is False and "выгод" in r.note.lower()
+
+
+def test_gift_deducts_expensive_position():
+    # Подарок — дорогая позиция комплекта → обнуляется именно она.
+    camp = _Camp("gift", gift={"condition": "count", "options": {2: "BIG-500"}}, slug="g")
+    items = [_oven(30000), ComboItem("Холодильник BIG-500", 90000, "fridge")]
+    valuer = make_gift_valuer(lambda m: ("Холодильник BIG-500", 90000))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.item_discounts == {1: 100.0} and r.discount_total == 90000.0
+    assert r.final_total == r.subtotal - 90000
+
+
+def test_best_combo_spec_price_beats_flat():
+    items = [_oven(45000), _cooktop(25000), _hood(15000),
+             ComboItem("ПММ", 40000, "dishwasher"), _fridge(97281)]
+    flat = _Camp("flat_combo", {2: 5, 3: 7, 4: 10, 5: 12}, slug="flat")
+    best = best_combo(items, [flat, KUP_SPEC])
+    assert best.campaign_slug == "kup_spec"      # спеццена (~70к) > flat 12%
+
+
+def test_flat_combo_all_excluded_no_discount():
+    camp = _Camp("flat_combo", {3: 8}, slug="m")
+    camp.exclusions = ["домино"]
+    items = [ComboItem(f"Варочная домино {i}", 9000, "cooktop", width_mm=288)
+             for i in range(3)]
+    r = compute_combo(items, camp)
+    assert r.applied is False                    # все исключены → участвующих 0
+
+
+def test_cascade_five_items_cheapest_free():
+    items = [_oven(50000), _cooktop(30000), _hood(20000),
+             ComboItem("ПММ", 40000, "dishwasher"),
+             ComboItem("СВЧ", 15000, "microwave")]
+    r = compute_combo(items, KORTING_CASCADE)
+    assert r.item_discounts == {4: 100} and r.discount_total == 15000.0
+
+
+def test_spec_price_requires_oven():
+    # Спеццена холодильника требует духовой шкаф в комплекте.
+    items = [_cooktop(25000), _hood(15000), ComboItem("ПММ", 40000, "dishwasher"),
+             _fridge(97281)]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied is False and "духов" in r.note.lower()

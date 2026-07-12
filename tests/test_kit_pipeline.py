@@ -18,7 +18,8 @@ from max_ekrom_bot.ekrom.catalog_cache import CatalogCache  # noqa: E402
 from max_ekrom_bot.ekrom.promo_store import PromoStore  # noqa: E402
 from max_ekrom_bot.ekrom.promos import GiftRule, PromoCampaign  # noqa: E402
 from max_ekrom_bot.models import (  # noqa: E402
-    ApplianceType, CatalogProduct, CustomerRequest, ProductSpec,
+    ApplianceType, CatalogProduct, CustomerRequest, MatchedItem, ProductSpec,
+    SelectionResult,
 )
 from max_ekrom_bot.pipeline import Pipeline  # noqa: E402
 
@@ -158,3 +159,48 @@ def test_build_kit_pdf(tmp_path):
     assert "Итого" in text and "Индивидуальная скидка" in text
     # Каскад −25% на наименьший (20000→15000): в карточке новая цена и «Скидка -25%».
     assert "Скидка -25%" in text and "15 000 ₽" in text
+
+
+# ── _kit_render_selection: per-item скидки к копиям (не наслаивает) ───────────
+
+def test_kit_render_selection_applies_item_discount_on_copies():
+    from max_ekrom_bot.pipeline import _kit_render_selection
+    from max_ekrom_bot.matching.kit_builder import BrandKit
+    from max_ekrom_bot.matching.combo_pricing import ComboResult
+
+    sel = SelectionResult(items=[
+        MatchedItem(spec=ProductSpec(appliance=OVEN),
+                    product=CatalogProduct(title="Духовой", url="u", price=40000)),
+        MatchedItem(spec=ProductSpec(appliance=ApplianceType.FRIDGE),
+                    product=CatalogProduct(title="Холодильник", url="f", price=100000)),
+    ])
+    combo = ComboResult(mechanic="spec_price", subtotal=140000, discount_total=73000,
+                        final_total=67000, applied=True, item_discounts={1: 73.0})
+    kit = BrandKit(brand="X", selection=sel, combo=combo, requested=2, coverage=2,
+                   design_consistent=True)
+
+    r1 = _kit_render_selection(kit)
+    fridge = r1.items[1].product
+    assert fridge.old_price == 100000 and fridge.price == 27000 and fridge.discount_pct == 73.0
+    assert r1.items[0].product.price == 40000            # позиция без скидки не тронута
+    # оригинальный selection не изменён (копии), повторный вызов не наслаивает
+    assert sel.items[1].product.price == 100000
+    r2 = _kit_render_selection(kit)
+    assert r2.items[1].product.price == 27000
+
+
+def test_kit_render_selection_keeps_unmatched():
+    from max_ekrom_bot.pipeline import _kit_render_selection
+    from max_ekrom_bot.matching.kit_builder import BrandKit
+    from max_ekrom_bot.matching.combo_pricing import ComboResult
+
+    sel = SelectionResult(items=[
+        MatchedItem(spec=ProductSpec(appliance=OVEN),
+                    product=CatalogProduct(title="Духовой", url="u", price=40000)),
+        MatchedItem(spec=ProductSpec(appliance=COOKTOP, raw_text="варка"), product=None),
+    ])
+    combo = ComboResult(mechanic="none", subtotal=40000, discount_total=0, final_total=40000)
+    kit = BrandKit(brand="X", selection=sel, combo=combo, requested=2, coverage=1,
+                   design_consistent=True)
+    r = _kit_render_selection(kit)
+    assert len(r.items) == 2 and r.items[1].product is None   # ненайденная сохранена

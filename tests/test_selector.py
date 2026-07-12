@@ -372,3 +372,12 @@ def test_combi_microwave_oven_kept_when_requested():
                            price=60000, attributes={"Функция СВЧ": "Да"})
     ranked = ProductSelector().ranked_candidates(spec, [combi])
     assert [p.url for p in ranked] == ["c"]       # просили СВЧ → комби подходит
+
+
+def test_combi_oven_by_title_and_attr():
+    from max_ekrom_bot.models import CatalogProduct
+    from max_ekrom_bot.matching.selector import _is_combi_microwave_oven
+    assert _is_combi_microwave_oven(CatalogProduct(title="Духовой шкаф с СВЧ", url="a"))
+    assert _is_combi_microwave_oven(CatalogProduct(title="Духовой X", url="b",
+                                    attributes={"Функция СВЧ": "Да"}))
+    assert not _is_combi_microwave_oven(CatalogProduct(title="Духовой шкаф Korting OKB", url="c"))
