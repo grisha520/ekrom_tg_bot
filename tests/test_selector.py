@@ -319,3 +319,56 @@ def test_ivory_cream_not_matched_as_white():
                            attributes={"Цвет": "Белый"})
     ranked = sel.ranked_candidates(spec, [ivory, white])
     assert [c.title for c in ranked] == ["Вытяжка Lex SIMPLE 600 WHITE"]
+
+
+# ── Смягчение размеров + комби-СВЧ (хвосты подбора, диагностика на проде) ──────
+
+def _cook(title, price, burners_attr=None):
+    from max_ekrom_bot.models import CatalogProduct
+    attrs = {"Количество конфорок": burners_attr} if burners_attr else {}
+    return CatalogProduct(title=title, url=title, price=price, attributes=attrs)
+
+
+def test_burners_soft_when_no_exact_match():
+    # «3 конфорки» точных нет → не «не найдено», а ближайшее (4 конф).
+    from max_ekrom_bot.models import ApplianceType, ProductSpec
+    from max_ekrom_bot.matching.selector import ProductSelector
+    spec = ProductSpec(appliance=ApplianceType.COOKTOP, burners=3, raw_text="варка 3 конфорки")
+    cands = [_cook("Варочная панель A", 20000, "4 конфорки"),
+             _cook("Варочная панель B", 18000, "2 конфорки")]
+    ranked = ProductSelector().ranked_candidates(spec, cands)
+    assert len(ranked) == 2                       # смягчилось, выдача не пустая
+
+
+def test_width_soft_when_no_match():
+    # «духовка 450» (высота компакта) не должна обнулять выдачу по ширине.
+    from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
+    from max_ekrom_bot.matching.selector import ProductSelector
+    spec = ProductSpec(appliance=ApplianceType.OVEN, width_mm=450, raw_text="духовка 450")
+    cands = [CatalogProduct(title="Духовой шкаф A", url="a", price=40000,
+                            attributes={"Ширина, мм": "595"}),
+             CatalogProduct(title="Духовой шкаф B", url="b", price=35000,
+                            attributes={"Ширина, мм": "595"})]
+    ranked = ProductSelector().ranked_candidates(spec, cands)
+    assert len(ranked) == 2                       # не 0 из-за строгой ширины 450
+
+
+def test_combi_microwave_oven_excluded_from_plain_oven():
+    from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
+    from max_ekrom_bot.matching.selector import ProductSelector
+    spec = ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовой шкаф")
+    plain = CatalogProduct(title="Духовой шкаф Midea MO60000", url="p", price=40000)
+    combi = CatalogProduct(title="Духовой шкаф Midea MCO82007 с функцией СВЧ", url="c",
+                           price=76990, attributes={"Функция СВЧ": "Да"})
+    ranked = ProductSelector().ranked_candidates(spec, [combi, plain])
+    assert [p.url for p in ranked] == ["p"]       # комби-СВЧ отсеян под простой духовой
+
+
+def test_combi_microwave_oven_kept_when_requested():
+    from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
+    from max_ekrom_bot.matching.selector import ProductSelector
+    spec = ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовой с СВЧ 2в1")
+    combi = CatalogProduct(title="Духовой шкаф Maunfeld с функцией СВЧ", url="c",
+                           price=60000, attributes={"Функция СВЧ": "Да"})
+    ranked = ProductSelector().ranked_candidates(spec, [combi])
+    assert [p.url for p in ranked] == ["c"]       # просили СВЧ → комби подходит

@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import statistics
 
-from ..models import CatalogProduct, MatchedItem, ProductSpec, SelectionResult
+from ..models import ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult
 
 # Веса скоринга: характеристики доминируют, цена — тай-брейк внутри сегмента.
 _W_ATTR = 10.0
@@ -105,6 +105,19 @@ _SUBTYPE_ATTR_KEY_SUBS = ("тип", "вид")
 
 def _has_stem(text: str, stems: frozenset[str]) -> bool:
     return any(s in text for s in stems)
+
+
+def _is_combi_microwave_oven(product: CatalogProduct) -> bool:
+    """Духовой шкаф с функцией СВЧ (комби 2-в-1) — по названию или атрибуту.
+
+    Такие дороже обычных и дублируют отдельную микроволновку, поэтому под простой
+    «духовой шкаф» их не подставляем (если клиент не просил СВЧ).
+    """
+    low = product.title.lower()
+    if "свч" in low or "микроволн" in low:
+        return True
+    val = _attr_get(product, "функция свч", "функция микроволнов")
+    return bool(val) and "да" in val.lower()
 
 
 def _request_has_subtype_intent(request_text: str) -> bool:
@@ -487,6 +500,16 @@ class ProductSelector:
                 if self._passes_filters(spec, c, ignore_constraints=True)
             ]
             priced = [c for c in filtered if c.price is not None]
+        # Смягчение размеров: точное число конфорок / ширина часто редки (3-конф.
+        # электрических почти нет; «духовка 450» = высота компакта, а не ширина).
+        # Если жёсткий размер обнулил выдачу — снимаем его, оставляя сигналом
+        # ранжирования: подбор вернёт БЛИЖАЙШЕЕ, а не «не найдено».
+        if not priced and (spec.width_mm or spec.burners):
+            filtered = [
+                c for c in candidates
+                if self._passes_filters(spec, c, ignore_constraints=True, ignore_dims=True)
+            ]
+            priced = [c for c in filtered if c.price is not None]
         if not priced:
             return []
         # Ценовой потолок («до 30000»): оставляем только то, что в бюджет. Если в
@@ -549,7 +572,8 @@ class ProductSelector:
         return not _color_conflict(_canon_color(spec.color), title_colors)
 
     def _passes_filters(
-        self, spec: ProductSpec, product: CatalogProduct, ignore_constraints: bool = False
+        self, spec: ProductSpec, product: CatalogProduct, ignore_constraints: bool = False,
+        ignore_dims: bool = False,
     ) -> bool:
         # Конфликт подтипов («кофемашина» vs кофеварка, «камера» vs ларь): клиент
         # явно назвал подтип — противоположный в названии/атрибутах отсеиваем.
@@ -585,10 +609,18 @@ class ProductSelector:
             return False
         if spec.fuel_type and _fuel_conflict(_canon_fuel(spec.fuel_type), _product_fuels(product)):
             return False
-        if spec.burners:
+        if spec.burners and not ignore_dims:
             b = _product_burners(product)
             if b is not None and b != spec.burners:
                 return False
+        # Духовой шкаф с СВЧ (комби 2-в-1) не подставляем под простой «духовой шкаф»,
+        # если клиент не просил СВЧ — дороже и дублирует отдельную микроволновку.
+        # Снимается смягчением (ignore_dims): если у бренда только комби — вернём его.
+        if (spec.appliance is ApplianceType.OVEN and not ignore_dims
+                and "свч" not in (spec.raw_text or "").lower()
+                and "микроволн" not in (spec.raw_text or "").lower()
+                and _is_combi_microwave_oven(product)):
+            return False
         # Тип установки: встраиваемый под запрос «встраиваемый» и наоборот
         # (#2 — иначе под «встраиваемый холодильник» мог попасть отдельностоящий).
         if spec.install_type:
@@ -597,8 +629,9 @@ class ProductSelector:
             if want and have and want != have:
                 return False
         # Жёсткая ширина: если в карточке ширина известна и не попадает в допуск —
-        # отсекаем. Молчание (ширина не указана) — не конфликт.
-        if spec.width_mm:
+        # отсекаем. Молчание (ширина не указана) — не конфликт. ignore_dims снимает
+        # (напр. «духовка 450» = высота компакта, а не ширина — не должна обнулять).
+        if spec.width_mm and not ignore_dims:
             w = _product_width(product)
             if w is not None and abs(w - spec.width_mm) > _WIDTH_TOLERANCE_MM:
                 return False
