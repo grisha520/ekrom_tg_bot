@@ -278,16 +278,24 @@ body{{font-family:'Rubik',sans-serif;color:#12232c;font-size:11px;-webkit-print-
 
 
 async def render_html_pdf(html: str, out_path: Path) -> Path:
-    """Отрендерить HTML в PDF через Chromium (Playwright). Формат A4, фон включён."""
+    """Отрендерить HTML в PDF через Chromium (Playwright). Формат A4, фон включён.
+
+    Ждём `load` (не `networkidle`: внешние шрифт/фото могут «висеть» и подвешивать
+    рендер), затем явно дожидаемся готовности шрифтов, чтобы Rubik применился.
+    """
     from playwright.async_api import async_playwright
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch()
+        browser = await pw.chromium.launch(args=["--no-sandbox"])
         try:
             page = await browser.new_page()
-            await page.set_content(html, wait_until="networkidle")
+            await page.set_content(html, wait_until="load")
+            try:
+                await page.wait_for_function("document.fonts.ready", timeout=6000)
+            except Exception:  # noqa: BLE001 — шрифт не догрузился, рендерим как есть
+                pass
             await page.pdf(path=str(out_path), format="A4", print_background=True)
         finally:
             await browser.close()
