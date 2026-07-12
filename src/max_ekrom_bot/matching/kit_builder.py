@@ -57,12 +57,18 @@ def split_out_of_scope(specs: list[ProductSpec]) -> tuple[list[ProductSpec], lis
         url = (s.category_url or "").lower()
         brand = (s.brand or "").strip().lower()
         foreign_brand = bool(brand) and not any(b.lower() in brand for b in TARGET_BRANDS)
-        out = (
-            foreign_brand
-            or any(st in txt for st in _OUT_OF_SCOPE_STEMS)
-            or any(st in url for st in _OUT_OF_SCOPE_URL_STEMS)
+
+        # Известный тип техники (духовка/варочная/…/ПОСУДОМОЙКА) — это техника 5
+        # брендов, а не сантехника. Стоп-слова применяем только к нераспознанным
+        # позициям: иначе «посудо-МОЙКА» ложно ловится стоп-словом «мойк».
+        known_appliance = s.appliance is not ApplianceType.UNKNOWN
+        is_dishwasher = "посудомо" in txt or "посудомо" in url  # посудомоечная/посудомойка
+        text_out = (
+            not known_appliance and not is_dishwasher
+            and (any(st in txt for st in _OUT_OF_SCOPE_STEMS)
+                 or any(st in url for st in _OUT_OF_SCOPE_URL_STEMS))
         )
-        (manager if out else in_scope).append(s)
+        (manager if (foreign_brand or text_out) else in_scope).append(s)
     return in_scope, manager
 
 

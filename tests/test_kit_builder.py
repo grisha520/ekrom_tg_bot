@@ -227,6 +227,18 @@ def test_split_out_of_scope():
     assert len(manager) == 3                             # мойка, смеситель, Smeg
 
 
+def test_dishwasher_not_mistaken_for_sink():
+    # «посудомойка» содержит «мойк», но это техника 5 брендов, не сантехника.
+    specs = [
+        ProductSpec(appliance=ApplianceType.DISHWASHER, raw_text="посудомойка 450"),
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="посудомойка 45 см"),
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="кухонная мойка нержавейка"),
+    ]
+    in_scope, manager = split_out_of_scope(specs)
+    assert [s.raw_text for s in in_scope] == ["посудомойка 450", "посудомойка 45 см"]
+    assert [s.raw_text for s in manager] == ["кухонная мойка нержавейка"]
+
+
 def test_client_brands_from_message():
     specs = [_spec(OVEN)]
     assert client_brands(specs, "можно Kuppersberg Maunfeld: духовой + варка") == (
