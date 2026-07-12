@@ -189,6 +189,19 @@ def test_client_colors_override_groups():
     assert "по вашему запросу" in kit.design_note
 
 
+def test_partial_client_colors_note_by_request():
+    # Часть позиций с явным цветом (белая духовка), часть без — пометка «по запросу»,
+    # а не «Единый цвет» по бесцветной позиции (иначе теряла бы белую духовку).
+    specs = [_spec(OVEN, color="белый"), _spec(HOOD)]
+    cands = [
+        [_p("Midea", "Духовой шкаф", 40000, color="белый")],
+        [_p("Midea", "Вытяжка", 12000, color="чёрный")],
+    ]
+    kit = build_brand_kit("Midea", specs, cands, [FLAT])
+    assert kit.coverage == 2
+    assert "по вашему запросу" in kit.design_note
+
+
 def test_prefers_special_fridge_model():
     # Акция «холодильник по спеццене»: движок сам берёт акционную модель RBN 1965,
     # хотя обычный выбор взял бы другой холодильник.

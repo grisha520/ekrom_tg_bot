@@ -228,12 +228,12 @@ def _finalize_kit(
     if colored and matched:
         # Явные цвета клиента могут «нарушать» группу (белая духовка + чёрная
         # варка по запросу) — это НЕ рассогласование, а выполнение требований.
-        if all(m.spec.color for m in matched):
+        # Если ХОТЬ ОДНА позиция с заданным цветом — пометка «по вашему запросу»
+        # (иначе она теряла бы заданные цвета и вводила в заблуждение).
+        if any(m.spec.color for m in matched):
             consistent, note = True, "Цвета позиций — по вашему запросу."
         else:
-            consistent, note = True, _palette_note(
-                [m.product for m in matched if not m.spec.color]
-            )
+            consistent, note = True, _palette_note([m.product for m in matched])
     else:
         consistent, note = _design_consistency([m.product for m in matched])
     return BrandKit(
