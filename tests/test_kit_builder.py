@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from max_ekrom_bot.matching.kit_builder import (
-    build_brand_kit, choose_best_kit, _design_consistency,
+    build_brand_kit, choose_best_kit, client_brands, split_out_of_scope,
+    _design_consistency,
 )
 from max_ekrom_bot.models import ApplianceType, CatalogProduct, ProductSpec
 
 OVEN, COOKTOP, HOOD = ApplianceType.OVEN, ApplianceType.COOKTOP, ApplianceType.HOOD
+FRIDGE = ApplianceType.FRIDGE
 
 
-def _spec(appliance):
-    return ProductSpec(appliance=appliance, raw_text=appliance.value)
+def _spec(appliance, **kw):
+    return ProductSpec(appliance=appliance, raw_text=appliance.value, **kw)
 
 
 def _p(brand, kind, price, color="чёрный"):
@@ -165,3 +167,72 @@ def test_kit_never_mixes_incompatible_colors():
     ]
     kit = build_brand_kit("Korting", specs, cands, [CASCADE])
     assert kit.coverage == 1  # взяли одну позицию, а не несочетаемую пару
+
+
+# ── Калибровка по оплаченным подборкам: цвет клиента, спец-модель, охват ───────
+
+def test_client_colors_override_groups():
+    # Эталон ЕкромКухонька: «духовка БЕЛАЯ + варка ЧЁРНАЯ» — цвета клиента соблюдаются,
+    # хотя они из разных цветовых групп.
+    specs = [_spec(OVEN, color="белый"), _spec(COOKTOP, color="чёрный")]
+    cands = [
+        [_p("Maunfeld", "Духовой шкаф", 36000, color="белый"),
+         _p("Maunfeld", "Духовой шкаф", 34000, color="чёрный")],
+        [_p("Maunfeld", "Варочная панель", 11000, color="чёрный"),
+         _p("Maunfeld", "Варочная панель", 12000, color="белый")],
+    ]
+    kit = build_brand_kit("Maunfeld", specs, cands, [FLAT])
+    assert kit.coverage == 2
+    titles = [m.product.title for m in kit.selection.matched]
+    assert "белый" in titles[0] and "чёрный" in titles[1]
+    assert kit.design_consistent is True
+    assert "по вашему запросу" in kit.design_note
+
+
+def test_prefers_special_fridge_model():
+    # Акция «холодильник по спеццене»: движок сам берёт акционную модель RBN 1965,
+    # хотя обычный выбор взял бы другой холодильник.
+    spec_camp = {"mechanic": "spec_price", "requires_oven": True, "slug": "kup_spec",
+                 "tiers": {}, "gift": None, "exclusions": [],
+                 "spec": {"models": ["RBN 1761", "RBN 1965"],
+                          "tiers": {3: 40000.0, 4: 27000.0}, "pct": None,
+                          "line_label": None}}
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD), _spec(FRIDGE)]
+    cands = [
+        [_p("Kuppersberg", "Духовой шкаф", 45000)],
+        [_p("Kuppersberg", "Варочная панель", 25000)],
+        [_p("Kuppersberg", "Вытяжка", 15000)],
+        [_p("Kuppersberg", "Встраиваемый холодильник RBN 1765", 80396),
+         _p("Kuppersberg", "Встраиваемый холодильник RBN 1965", 97281)],
+    ]
+    kit = build_brand_kit("Kuppersberg", specs, cands, [spec_camp])
+    fridge = kit.selection.matched[3].product
+    assert "RBN 1965" in fridge.title                    # взяли акционную модель
+    assert kit.combo.mechanic == "spec_price" and kit.combo.applied
+    assert kit.combo.discount_total == 97281 - 40000     # 3 предмета → фикс 40 000
+
+
+def test_split_out_of_scope():
+    specs = [
+        _spec(OVEN),
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="мойка металл"),
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="смеситель 2 в 1 сатин"),
+        ProductSpec(appliance=ApplianceType.COOKTOP, raw_text="варочная Smeg",
+                    brand="Smeg"),
+        ProductSpec(appliance=ApplianceType.DISHWASHER, raw_text="ПММ 450",
+                    brand="Kuppersberg"),
+    ]
+    in_scope, manager = split_out_of_scope(specs)
+    assert [s.raw_text for s in in_scope] == ["oven", "ПММ 450"]
+    assert len(manager) == 3                             # мойка, смеситель, Smeg
+
+
+def test_client_brands_from_message():
+    specs = [_spec(OVEN)]
+    assert client_brands(specs, "можно Kuppersberg Maunfeld: духовой + варка") == (
+        "Maunfeld", "Kuppersberg",
+    )
+    assert client_brands(specs, "просто духовка и варка") == (
+        "Korting", "Maunfeld", "Midea", "Lex", "Kuppersberg",
+    )
+    assert client_brands([_spec(OVEN, brand="Midea")], "") == ("Midea",)

@@ -61,6 +61,7 @@ from .messenger.client_ux import (
     format_kit,
     history_inline_keyboard,
     is_smalltalk,
+    kit_all_to_manager_text,
     kit_pdf_keyboard,
     kit_welcome_text,
     smalltalk_reply,
@@ -916,6 +917,14 @@ async def _run_kit(message: Message, text: str, *, real_op: bool = False) -> Non
                 )
                 return
 
+            if kit is not None and kit.coverage == 0 and kit.manager_specs:
+                # Весь запрос вне охвата (мойки/чужие бренды) — передаём менеджеру.
+                await status.edit_text(
+                    kit_all_to_manager_text(kit), parse_mode=ParseMode.HTML
+                )
+                if not real_op:
+                    await _notify_lead(message, kit.selection)
+                return
             if kit is None or kit.coverage == 0:
                 await status.edit_text(empty_result_text(), parse_mode=ParseMode.HTML)
                 if not real_op and kit is not None:

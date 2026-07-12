@@ -371,9 +371,33 @@ def format_kit(kit: object, settings: Settings) -> str:
     if kit.design_note:
         lines.append("")
         lines.append(f"🎨 {html.escape(kit.design_note)}")
+
+    # Позиции вне охвата бота (мойки/смесители/чужие бренды) — подберёт менеджер.
+    manager_specs = getattr(kit, "manager_specs", None) or []
+    if manager_specs:
+        lines.append("")
+        lines.append("👤 <b>Эти позиции подберёт менеджер</b> (вне комплектов 5 брендов):")
+        for s in manager_specs:
+            lines.append(f"• {html.escape(s.raw_text or 'позиция')}")
+
     lines.append(
         f"\n<i>ℹ️ Автоподбор {shop}. Цены, наличие и итог по акции подтвердит менеджер.</i>"
     )
+    return "\n".join(lines)
+
+
+def kit_all_to_manager_text(kit: object) -> str:
+    """Весь запрос вне охвата бота: честно передаём менеджеру (лид уже ушёл)."""
+    lines = [
+        "👤 <b>Эти позиции подберёт менеджер</b> — они вне комплектов "
+        "5 брендов (Korting, Maunfeld, Midea, Lex, Kuppersberg):",
+        "",
+    ]
+    for s in (getattr(kit, "manager_specs", None) or []):
+        lines.append(f"• {html.escape(s.raw_text or 'позиция')}")
+    lines.append("")
+    lines.append("Я передал запрос — менеджер свяжется с вами. "
+                 "А комплект техники из 5 брендов соберу сам: напишите позиции.")
     return "\n".join(lines)
 
 

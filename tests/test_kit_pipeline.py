@@ -88,6 +88,59 @@ def test_kit_lex_without_promo(tmp_path):
     assert kit.combo.final_total == 48000.0
 
 
+def test_kit_out_of_scope_positions_go_to_manager(tmp_path):
+    # Мойка/смеситель — вне охвата 5 брендов: уходят менеджеру, комплект собирается
+    # из остальных позиций.
+    store = PromoStore(tmp_path / "c.db")
+    cache = CatalogCache(tmp_path / "cat.db")
+    req = CustomerRequest(specs=[
+        ProductSpec(appliance=OVEN, raw_text="духовой шкаф"),
+        ProductSpec(appliance=COOKTOP, raw_text="варочная панель"),
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="мойка нержавейка накладная"),
+    ])
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000)],
+        [_p("Korting", "Варочная панель", 25000)],
+        [CatalogProduct(title="Мойка EMAR EMB-131", url="m", price=19935)],
+    ]
+    kit = _pipeline()._kit_from_candidates(req, cands, store=store, cache=cache)
+    assert kit is not None and kit.brand == "Korting"
+    assert kit.coverage == 2 and kit.requested == 2      # мойка не в счёте покрытия
+    assert [s.raw_text for s in kit.manager_specs] == ["мойка нержавейка накладная"]
+
+
+def test_kit_whole_request_out_of_scope(tmp_path):
+    # Весь запрос вне охвата (сантехника) → «пустой» комплект с manager_specs.
+    store = PromoStore(tmp_path / "c.db")
+    cache = CatalogCache(tmp_path / "cat.db")
+    req = CustomerRequest(specs=[
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="мойка графит 700"),
+        ProductSpec(appliance=ApplianceType.UNKNOWN, raw_text="смеситель с фильтром"),
+    ])
+    kit = _pipeline()._kit_from_candidates(req, [[], []], store=store, cache=cache)
+    assert kit is not None and kit.coverage == 0
+    assert len(kit.manager_specs) == 2
+
+
+def test_kit_respects_client_brand_mentions(tmp_path):
+    # «можно Maunfeld» в сообщении → Korting не рассматриваем, даже если он выгоднее.
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([_camp(slug="casc", brand="Korting", mechanic="cascade_cheapest",
+                             tiers={2: 25}, requires_oven=True)])
+    cache = CatalogCache(tmp_path / "cat.db")
+    req = CustomerRequest(
+        specs=[ProductSpec(appliance=OVEN, raw_text="духовой шкаф"),
+               ProductSpec(appliance=COOKTOP, raw_text="варочная панель")],
+        original_message="можно Maunfeld: духовой шкаф и варочная панель",
+    )
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000), _p("Maunfeld", "Духовой шкаф", 42000)],
+        [_p("Korting", "Варочная панель", 20000), _p("Maunfeld", "Варочная панель", 21000)],
+    ]
+    kit = _pipeline()._kit_from_candidates(req, cands, store=store, cache=cache)
+    assert kit.brand == "Maunfeld"
+
+
 def test_build_kit_pdf(tmp_path):
     store = PromoStore(tmp_path / "c.db")
     store.replace_all([_camp(slug="casc", mechanic="cascade_cheapest",

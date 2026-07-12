@@ -1,14 +1,19 @@
 """Движок сборки комплекта одного бренда (Ф4 проекта комплектов).
 
 Клиент называет позиции («духовка + варочная + вытяжка»), а бот собирает комплект
-из ОДНОГО бренда пяти брендов проекта и в СОЧЕТАЮЩИХСЯ цветах: по каждой позиции
-берёт лучший товар бренда, чей цвет входит в одну цветовую ГРУППУ (тёмная+сталь /
-светлая+сталь — см. `_COLOR_GROUPS`), считает выгоду акции через
-`combo_pricing.best_combo` и выбирает бренд с лучшим сочетанием покрытие → выгода →
-цена. Так комплект визуально согласован (нержавейка/серый — нейтральные мостики,
-сочетаются и с тёмным, и со светлым), но тёмное со светлым не смешивается. Политика
-«нет идеального → ближайшее»: бренд/группа с неполным покрытием тоже рассматривается,
-но покрытие приоритетнее всего.
+из ОДНОГО бренда пяти брендов проекта, откалиброванный по оплаченным подборкам
+менеджера:
+
+  • ЦВЕТ: позиция с явным цветом клиента («духовка белая, варка чёрная») получает
+    ровно его; позиции БЕЗ цвета собираются в одну цветовую ГРУППУ (тёмная+сталь /
+    светлая+сталь — `_COLOR_GROUPS`; нержавейка и серый — нейтральные мостики).
+  • АКЦИИ: выгоду считает `combo_pricing.best_combo`; для механики «холодильник по
+    спеццене» движок сам предпочитает акционную модель холодильника (если клиент не
+    задал свою и она проходит фильтры позиции).
+  • ОХВАТ: только 5 брендов — позиции вне охвата (мойки/смесители/измельчители/
+    фильтры, чужие бренды) отделяются `split_out_of_scope` и уходят менеджеру.
+  • Выбор бренда: покрытие → дизайн → выгода → цена; «нет идеального → ближайшее»,
+    полнота комплекта важнее размера скидки.
 
 Ядро чистое: на вход — уже собранные кандидаты по позициям (из каталога/кэша),
 поставщик кампаний бренда и оцифровщик подарка. Интеграцию с реальным каталогом,
@@ -21,10 +26,57 @@ from dataclasses import dataclass, field
 
 from ..models import ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult
 from .combo_pricing import ComboItem, ComboResult, best_combo
-from .selector import ProductSelector, _COLOR_FAMILY, _product_colors
+from .selector import (
+    ProductSelector, _COLOR_FAMILY, _product_colors, _product_install, _product_width,
+)
 
 # Пять брендов проекта (дублируем как строки, чтобы не тянуть сетевой модуль promos).
 TARGET_BRANDS: tuple[str, ...] = ("Korting", "Maunfeld", "Midea", "Lex", "Kuppersberg")
+
+# Позиции вне охвата бота (решение заказчика: только техника 5 брендов; мойки,
+# смесители, измельчители, фильтры, сантехника — подбирает менеджер).
+_OUT_OF_SCOPE_STEMS: tuple[str, ...] = (
+    "мойк", "раковин", "смесител", "измельчител", "фильтр", "сантех",
+)
+_OUT_OF_SCOPE_URL_STEMS: tuple[str, ...] = (
+    "moyki", "rakovin", "smesitel", "izmelchitel", "filtr", "santekh",
+)
+
+
+def split_out_of_scope(specs: list[ProductSpec]) -> tuple[list[ProductSpec], list[ProductSpec]]:
+    """Разделить позиции запроса: (для сборки комплекта, для менеджера).
+
+    Менеджеру уходят позиции вне техники 5 брендов: мойки/смесители/измельчители/
+    фильтры/сантехника и позиции с ЧУЖИМ брендом (Smeg, Bosch, …) — их бот не
+    подбирает, а честно передаёт с лидом.
+    """
+    in_scope: list[ProductSpec] = []
+    manager: list[ProductSpec] = []
+    for s in specs:
+        txt = " ".join(x for x in (s.raw_text, s.category_name or "") if x).lower()
+        url = (s.category_url or "").lower()
+        brand = (s.brand or "").strip().lower()
+        foreign_brand = bool(brand) and not any(b.lower() in brand for b in TARGET_BRANDS)
+        out = (
+            foreign_brand
+            or any(st in txt for st in _OUT_OF_SCOPE_STEMS)
+            or any(st in url for st in _OUT_OF_SCOPE_URL_STEMS)
+        )
+        (manager if out else in_scope).append(s)
+    return in_scope, manager
+
+
+def client_brands(specs: list[ProductSpec], original_message: str = "") -> tuple[str, ...]:
+    """Бренды из пятёрки, которые клиент явно назвал допустимыми (или все 5).
+
+    Эталон: «можно Kuppersberg Maunfeld: …» → перебираем только их. Ищем упоминания
+    и в брендах позиций, и в исходном сообщении.
+    """
+    blob = (original_message or "").lower() + " " + " ".join(
+        (s.brand or "").lower() for s in specs
+    )
+    mentioned = tuple(b for b in TARGET_BRANDS if b.lower() in blob)
+    return mentioned or TARGET_BRANDS
 
 
 @dataclass
@@ -38,6 +90,7 @@ class BrandKit:
     coverage: int                       # сколько позиций удалось закрыть
     design_consistent: bool             # согласован ли комплект по цвету/финишу
     design_note: str = ""
+    manager_specs: list[ProductSpec] = field(default_factory=list)  # позиции → менеджеру
 
     @property
     def is_full(self) -> bool:
@@ -65,6 +118,26 @@ def _brand_of(product: CatalogProduct, brand: str) -> bool:
     """Товар относится к бренду (по названию или полю brand)."""
     b = brand.lower()
     return b in (product.title or "").lower() or b in (product.brand or "").lower()
+
+
+def _special_fridge_models(campaigns: list) -> list[str]:
+    """Модели холодильников из акций «по спеццене» бренда (RBN 1761/1965, …).
+
+    Только полностью считаемые правила (тарифы фикс-цен): вариант с линейкой
+    «Эксклюзив» проверить нельзя — модель не предпочитаем, чтобы не обещать зря.
+    """
+    models: list[str] = []
+    for c in campaigns:
+        spec = c.get("spec") if isinstance(c, dict) else getattr(c, "spec", None)
+        if not spec:
+            continue
+        tiers = spec.get("tiers") if isinstance(spec, dict) else spec.tiers
+        line = spec.get("line_label") if isinstance(spec, dict) else spec.line_label
+        if tiers and not line:
+            for m in (spec.get("models") if isinstance(spec, dict) else spec.models) or []:
+                if m not in models:
+                    models.append(m)
+    return models
 
 
 # Группы сочетающихся цветов (канонические цвета из selector._COLOR_TOKENS).
@@ -130,12 +203,22 @@ def _finalize_kit(
             category=_spec_category(m.spec),
             is_oven=(m.spec.appliance is ApplianceType.OVEN),
             url=m.product.url,
+            # Признаки для правил «не участвуют» (домино/отдельностоящие/…).
+            width_mm=_product_width(m.product),
+            install=_product_install(m.product),
         )
         for m in matched
     ]
     combo = best_combo(combo_items, campaigns, gift_value)
     if colored and matched:
-        consistent, note = True, _palette_note([m.product for m in matched])
+        # Явные цвета клиента могут «нарушать» группу (белая духовка + чёрная
+        # варка по запросу) — это НЕ рассогласование, а выполнение требований.
+        if all(m.spec.color for m in matched):
+            consistent, note = True, "Цвета позиций — по вашему запросу."
+        else:
+            consistent, note = True, _palette_note(
+                [m.product for m in matched if not m.spec.color]
+            )
     else:
         consistent, note = _design_consistency([m.product for m in matched])
     return BrandKit(
@@ -154,13 +237,14 @@ def build_brand_kit(
     selector: ProductSelector | None = None,
     gift_value: object | None = None,
 ) -> BrandKit:
-    """Собрать комплект бренда СТРОГО одного цвета.
+    """Собрать комплект бренда в согласованных цветах, с приоритетом акционных моделей.
 
-    По каждой позиции ранжируем товары бренда, затем для каждого доступного цвета
-    (канонический — «чёрный»/«белый»/«нержавейка»/…) собираем набор, где ВСЕ позиции
-    этого цвета, и берём лучший по покрытие→выгода→цена. Так комплект всегда единого
-    цвета/финиша. Если цвет ни у кого не распознан — собираем без цветовой гарантии
-    (с пометкой, что цвет уточнит менеджер).
+    По каждой позиции ранжируем товары бренда; позиции с ЯВНЫМ цветом клиента берут
+    лучший товар этого цвета (селектор уже отфильтровал), позиции без цвета
+    собираются в одну цветовую группу — перебираем группы и берём лучший набор по
+    покрытие→выгода→цена. Если у бренда есть акция «холодильник по спеццене», для
+    позиции-холодильника без явной модели клиента предпочитаем акционную модель.
+    Цвет не распознан ни у кого — сборка без цветовой гарантии (пометка менеджеру).
 
     candidates_per_spec[i] — кандидаты под specs[i] (любых брендов); отбираем товары
     `brand`. campaigns — акции бренда. gift_value — оцифровщик подарка (или None).
@@ -171,13 +255,32 @@ def build_brand_kit(
         brand_cands = [c for c in cands if _brand_of(c, brand)]
         ranked_per_spec.append(selector.ranked_candidates(spec, brand_cands))
 
+    special_models = _special_fridge_models(campaigns)
+
+    def pick(spec: ProductSpec, ranked: list[CatalogProduct],
+             group: frozenset[str] | None) -> CatalogProduct | None:
+        # Явный цвет клиента: селектор уже отфильтровал — цветовая группа не давит.
+        if group is None or spec.color:
+            pool = ranked
+        else:
+            pool = [p for p in ranked if _product_colors(p) & group]
+        if not pool:
+            return None
+        # Спеццена холодильника: предпочитаем акционную модель (клиент модель не задал).
+        if special_models and spec.appliance is ApplianceType.FRIDGE and not spec.model:
+            hot = next(
+                (p for p in pool
+                 if any(m.lower() in p.title.lower() for m in special_models)),
+                None,
+            )
+            if hot is not None:
+                return hot
+        return pool[0]
+
     def assemble(group: frozenset[str] | None) -> list[MatchedItem]:
         items: list[MatchedItem] = []
         for spec, ranked in zip(specs, ranked_per_spec):
-            if group is None:
-                chosen = ranked[0] if ranked else None
-            else:
-                chosen = next((p for p in ranked if _product_colors(p) & group), None)
+            chosen = pick(spec, ranked, group)
             miss = (f"У бренда {brand} нет позиции"
                     + (" в этой цветовой гамме" if group else "") + " под этот пункт")
             items.append(MatchedItem(

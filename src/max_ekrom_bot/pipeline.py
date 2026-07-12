@@ -18,8 +18,13 @@ from .config import Settings, get_settings
 from .ekrom.catalog import build_category_url, category_for
 from .ekrom.client import EkromAuthError, EkromCartError, EkromClient, product_slug
 from .matching import ProductSelector
-from .matching.combo_pricing import make_gift_valuer
-from .matching.kit_builder import BrandKit, choose_best_kit
+from .matching.combo_pricing import compute_combo, make_gift_valuer
+from .matching.kit_builder import (
+    BrandKit,
+    choose_best_kit,
+    client_brands,
+    split_out_of_scope,
+)
 from .models import (
     ApplianceType,
     CatalogProduct,
@@ -283,14 +288,36 @@ class Pipeline:
 
         Вынесена отдельно (без браузера) ради тестируемости: `store` даёт акции
         бренда, `cache` — цену подарка для оцифровки (`find_by_model`).
+
+        Охват — только 5 брендов: позиции вне охвата (мойки/смесители/чужие бренды)
+        отделяются и уходят менеджеру (`kit.manager_specs`). Если клиент явно назвал
+        допустимые бренды («можно Kuppersberg Maunfeld») — перебираем только их.
         """
         segment = {"budget": "эконом", "premium": "премиум"}.get(level or "", request.segment)
         selector = ProductSelector(segment=segment)
         gift_value = make_gift_valuer(cache.find_by_model) if cache is not None else None
-        return choose_best_kit(
-            request.specs, candidates_per_spec, store.campaigns_for_brand,
+
+        in_scope, manager_specs = split_out_of_scope(request.specs)
+        if not in_scope:
+            if not manager_specs:
+                return None
+            # Весь запрос вне охвата бота — целиком менеджеру (с лидом).
+            return BrandKit(
+                brand="", selection=SelectionResult(items=[]),
+                combo=compute_combo([], None), requested=0, coverage=0,
+                design_consistent=False, manager_specs=manager_specs,
+            )
+
+        cand_by_spec = dict(zip([id(s) for s in request.specs], candidates_per_spec))
+        kit = choose_best_kit(
+            in_scope, [cand_by_spec[id(s)] for s in in_scope],
+            store.campaigns_for_brand,
+            brands=client_brands(request.specs, request.original_message),
             selector=selector, gift_value=gift_value,
         )
+        if kit is not None:
+            kit.manager_specs = manager_specs
+        return kit
 
     async def select_kit(
         self, request: CustomerRequest, level: str | None = None, enrich: bool = True,
