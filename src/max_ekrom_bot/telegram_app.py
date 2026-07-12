@@ -973,7 +973,14 @@ async def callback_kit_pdf(callback: CallbackQuery) -> None:
     await callback.answer("📄 Готовлю PDF…")
     try:
         pipeline = Pipeline(get_settings())
-        pdf_path = await asyncio.to_thread(pipeline.build_kit_pdf, kit, None)
+        # PDF «точь-в-точь» как корзина ekrom (HTML→Chromium); при сбое рендера —
+        # фолбэк на reportlab-версию, чтобы клиент всё равно получил файл.
+        try:
+            async with _EKROM_LOCK:
+                pdf_path = await pipeline.build_kit_pdf_html(kit, None)
+        except Exception:  # noqa: BLE001
+            logger.warning("HTML-рендер PDF не удался — фолбэк на reportlab", exc_info=True)
+            pdf_path = await asyncio.to_thread(pipeline.build_kit_pdf, kit, None)
         await callback.message.answer_document(
             FSInputFile(pdf_path),
             caption=f"📄 Комплект {kit.brand} · {_fmt_price(kit.combo.final_total)}",

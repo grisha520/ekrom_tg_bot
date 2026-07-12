@@ -396,12 +396,29 @@ class Pipeline:
 
         await asyncio.gather(*(one(m.product) for m in kit.selection.matched if m.product))
 
-    def build_kit_pdf(self, kit: BrandKit, out_path: Path | None = None) -> Path:
-        """Сгенерировать PDF комплекта (свой генератор в стиле корзины ekrom, Ф3).
+    def _kit_pdf_out(self, out_path: Path | None) -> Path:
+        if out_path is not None:
+            return Path(out_path)
+        out_dir = self._settings.output_path
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / f"komplekt_{datetime.now():%Y%m%d_%H%M%S}.pdf"
 
-        Итог акции берём из уже посчитанного `kit.combo`; позиции со скидкой
-        (спеццена холодильника / подарок −100% / плоский %) рисуются как в эталоне
-        корзины — новая цена + зачёркнутая старая + бейдж «Скидка −N%».
+    async def build_kit_pdf_html(self, kit: BrandKit, out_path: Path | None = None) -> Path:
+        """PDF комплекта «точь-в-точь» как корзина ekrom — HTML+CSS → Chromium.
+
+        Верстаем ту же разметку и рендерим встроенным Playwright; подставляем наши
+        данные и посчитанную скидку (per-item «Скидка −N%» + зачёркнутая цена).
+        """
+        from .pdf.cart_html import build_cart_html, render_html_pdf
+
+        html = build_cart_html(_kit_render_selection(kit), self._settings, kit.combo)
+        return await render_html_pdf(html, self._kit_pdf_out(out_path))
+
+    def build_kit_pdf(self, kit: BrandKit, out_path: Path | None = None) -> Path:
+        """Фолбэк-генератор PDF комплекта (reportlab), если Chromium-рендер не удался.
+
+        Итог берём из `kit.combo`; позиции со скидкой рисуются новая цена +
+        зачёркнутая старая + бейдж «Скидка −N%».
         """
         from .pdf.cart_style import build_cart_style_pdf
 
