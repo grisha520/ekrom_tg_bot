@@ -53,7 +53,7 @@ def test_cart_style_pdf_flat_combo_result(tmp_path):
                         note="Скидка −8% на комплект из 3 позиций.")
     build_cart_style_pdf(_sel(), Settings(LLM_PROVIDER="rule"), out, combo=combo)
     text = _text(out)
-    assert "Скидка на комплект" in text and "8%" in text
+    assert "Индивидуальная скидка" in text and "8%" in text  # формат эталона корзины
 
 
 def test_cart_style_pdf_cascade_result(tmp_path):
@@ -67,8 +67,8 @@ def test_cart_style_pdf_cascade_result(tmp_path):
                         note="Скидка −25% на самый недорогой товар в комплекте.")
     build_cart_style_pdf(_sel(), Settings(LLM_PROVIDER="rule"), out, combo=combo)
     text = _text(out)
-    assert "Скидка на комплект по акции" in text
-    assert "наименьший" not in text.lower() or "недорог" in text.lower()
+    assert "Индивидуальная скидка" in text     # общий % от суммы, как в эталоне
+    assert "6.87%" in text                      # 8582.5 / 124903
 
 
 def test_cart_style_pdf_product_without_attributes(tmp_path):

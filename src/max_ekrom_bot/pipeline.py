@@ -121,6 +121,35 @@ def _rerank_prompts(spec: ProductSpec, products: list[CatalogProduct], segment: 
     return _RERANK_SYSTEM, user
 
 
+def _kit_render_selection(kit: BrandKit) -> SelectionResult:
+    """Подготовить позиции комплекта к PDF: применить per-item скидки акции.
+
+    `combo.item_discounts` ключует индексы среди MATCHED-позиций. Продукты копируем
+    (pydantic model_copy), чтобы повторная генерация PDF не наслаивала скидку на
+    уже уценённую цену в живом selection.
+    """
+    items: list[MatchedItem] = []
+    midx = 0
+    for it in kit.selection.items:
+        if it.product is None:
+            items.append(it)
+            continue
+        pct = kit.combo.item_discounts.get(midx)
+        prod = it.product
+        if pct and prod.price:
+            prod = prod.model_copy(update={
+                "old_price": prod.price,
+                "price": round(prod.price * (1 - pct / 100), 2),
+                "discount_pct": pct,
+            })
+        items.append(MatchedItem(
+            spec=it.spec, product=prod,
+            candidates_count=it.candidates_count, reason=it.reason,
+        ))
+        midx += 1
+    return SelectionResult(items=items)
+
+
 def _model_tokens(model: str | None) -> list[str]:
     """Значимые токены модели/артикула (буквы/цифры), напр. 'OGG 771 CFX'."""
     if not model:
@@ -370,12 +399,14 @@ class Pipeline:
     def build_kit_pdf(self, kit: BrandKit, out_path: Path | None = None) -> Path:
         """Сгенерировать PDF комплекта (свой генератор в стиле корзины ekrom, Ф3).
 
-        Итог акции берём из уже посчитанного `kit.combo` (скидка/подарок/пометка).
+        Итог акции берём из уже посчитанного `kit.combo`; позиции со скидкой
+        (спеццена холодильника / подарок −100% / плоский %) рисуются как в эталоне
+        корзины — новая цена + зачёркнутая старая + бейдж «Скидка −N%».
         """
         from .pdf.cart_style import build_cart_style_pdf
 
         return build_cart_style_pdf(
-            kit.selection, self._settings, out_path, combo=kit.combo
+            _kit_render_selection(kit), self._settings, out_path, combo=kit.combo
         )
 
     # Кап премиум-уровня: не дороже стольких медиан по подходящим кандидатам —

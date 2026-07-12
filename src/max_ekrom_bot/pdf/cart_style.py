@@ -134,8 +134,9 @@ def _product_block(item, st) -> KeepTogether:
     right.append(Spacer(1, 1.5 * mm))
     price_cell: list = []
     if p.old_price and p.old_price > (p.price or 0):
-        pct = p.discount_pct or round((1 - (p.price or 0) / p.old_price) * 100)
-        price_cell.append(Paragraph(f"Скидка -{int(pct)}%", st["disc"]))
+        pct = p.discount_pct or round((1 - (p.price or 0) / p.old_price) * 100, 2)
+        # Дробный % как в эталоне корзины ekrom («Скидка -68.22%», «-100%»).
+        price_cell.append(Paragraph(f"Скидка -{pct:g}%", st["disc"]))
         price_cell.append(Paragraph(f'<strike>{_fmt(p.old_price)}</strike>', st["old"]))
     prow = Table(
         [[Paragraph("1 шт", st["base"])] + [price_cell + [Paragraph(_fmt(p.price), st["price"])]]],
@@ -218,19 +219,21 @@ def build_cart_style_pdf(
     gift_line: tuple[str, float] | None = None
     note = promo_note
     manager_review = False
+    final: float | None = None
     if combo is not None:
         subtotal = combo.subtotal
         note = combo.note or promo_note
         manager_review = combo.manager_review
-        if combo.applied and combo.gift_title:
-            # Подарок идёт СВЕРХУ бесплатно — сумму комплекта не уменьшает.
+        final = combo.final_total
+        if combo.applied and combo.gift_title and combo.final_total >= combo.subtotal:
+            # Подарок СВЕРХУ (модель не входит в позиции) — сумму не уменьшает.
             gift_line = (combo.gift_title, combo.discount_total)
-        elif combo.applied:
+        elif combo.applied and combo.discount_total:
+            # Формат эталонного PDF корзины: «Индивидуальная скидка −X%  <рубли>»,
+            # где X — общий % от суммы без скидки (спеццена/подарок-вычет/каскад/%).
             disc_amount = combo.discount_total
-            disc_label = (
-                f"Скидка на комплект −{combo.combo_discount_pct:g}%"
-                if combo.combo_discount_pct else "Скидка на комплект по акции"
-            )
+            pct = combo.discount_total / combo.subtotal * 100 if combo.subtotal else 0.0
+            disc_label = f"Индивидуальная скидка −{pct:.2f}%".replace(".00%", "%")
     elif combo_discount_pct:
         disc_amount = subtotal * combo_discount_pct / 100
         disc_label = f"Скидка на комплект −{combo_discount_pct:.2f}%".rstrip("0").rstrip(".")
@@ -243,7 +246,8 @@ def build_cart_style_pdf(
         g_title, g_price = gift_line
         rows.append([Paragraph(f"В подарок: {g_title} (стоимость {_fmt(g_price)})", st["total_l"]),
                      Paragraph("бесплатно", st["total_v"])])
-    final = subtotal - disc_amount
+    if final is None:
+        final = subtotal - disc_amount
     final_label = "Сумма к оплате" if (gift_line and not disc_amount) else "Сумма со скидкой"
     tt = Table(rows, colWidths=[130 * mm, 50 * mm])
     tt.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2)]))

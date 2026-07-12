@@ -155,4 +155,6 @@ def test_build_kit_pdf(tmp_path):
     out = pipe.build_kit_pdf(kit, tmp_path / "kit.pdf")
     assert out.exists() and out.stat().st_size > 1000
     text = "".join(p.extract_text() or "" for p in PdfReader(str(out)).pages)
-    assert "Итого" in text and "Скидка на комплект" in text
+    assert "Итого" in text and "Индивидуальная скидка" in text
+    # Каскад −25% на наименьший (20000→15000): в карточке новая цена и «Скидка -25%».
+    assert "Скидка -25%" in text and "15 000 ₽" in text

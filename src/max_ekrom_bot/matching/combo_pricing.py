@@ -222,7 +222,9 @@ def compute_combo(
             mechanic=mechanic, subtotal=subtotal, discount_total=discount,
             final_total=round(subtotal - discount, 2), applied=True,
             combo_discount_pct=pct,
-            item_discounts={k: pct for k in part} if len(part) < len(items) else {},
+            # На каждой участвующей позиции — её % (как в эталонных PDF менеджера:
+            # «Скидка −11%» на каждой строке + общий итог).
+            item_discounts={k: pct for k in part},
             campaign_slug=slug,
             note=f"Скидка −{_pct(pct)}% на комплект из {distinct} позиций{excl_note}.",
         )
