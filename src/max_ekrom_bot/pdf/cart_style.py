@@ -94,6 +94,12 @@ def _attr(product, *subs) -> str | None:
     return None
 
 
+# Максимум строк характеристик в карточке: обогащённые товары каталога несут
+# 30–50 атрибутов, и KeepTogether-карточка перестаёт влезать на страницу
+# (LayoutError). Эталонные PDF менеджера показывают ~8–10 ключевых строк.
+_MAX_CHAR_ROWS = 12
+
+
 def _char_rows(product, st) -> list[list]:
     rows: list[list] = []
     for k, v in (product.attributes or {}).items():
@@ -103,6 +109,8 @@ def _char_rows(product, st) -> list[list]:
         if not val:
             continue
         rows.append([Paragraph(k, st["aname"]), Paragraph(val, st["base"])])
+        if len(rows) >= _MAX_CHAR_ROWS:
+            break
     return rows
 
 

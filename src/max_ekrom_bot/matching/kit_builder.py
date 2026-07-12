@@ -120,23 +120,32 @@ def _brand_of(product: CatalogProduct, brand: str) -> bool:
     return b in (product.title or "").lower() or b in (product.brand or "").lower()
 
 
-def _special_fridge_models(campaigns: list) -> list[str]:
-    """Модели холодильников из акций «по спеццене» бренда (RBN 1761/1965, …).
+def _preferred_promo_models(campaigns: list) -> list[str]:
+    """Модели, которые выгодно ставить в комплект по акциям бренда.
 
-    Только полностью считаемые правила (тарифы фикс-цен): вариант с линейкой
-    «Эксклюзив» проверить нельзя — модель не предпочитаем, чтобы не обещать зря.
+    Спеццена (RBN 1761/1965 — фикс-цена при комплекте) и подарочные модели
+    (MID45S100I — −100%, если она закрывает запрошенную позицию). Правила с
+    линейкой «Эксклюзив» не предпочитаем — условие не проверить по каталогу.
     """
     models: list[str] = []
+
+    def _add(m: str) -> None:
+        if m and m not in models:
+            models.append(m)
+
     for c in campaigns:
         spec = c.get("spec") if isinstance(c, dict) else getattr(c, "spec", None)
-        if not spec:
-            continue
-        tiers = spec.get("tiers") if isinstance(spec, dict) else spec.tiers
-        line = spec.get("line_label") if isinstance(spec, dict) else spec.line_label
-        if tiers and not line:
-            for m in (spec.get("models") if isinstance(spec, dict) else spec.models) or []:
-                if m not in models:
-                    models.append(m)
+        if spec:
+            tiers = spec.get("tiers") if isinstance(spec, dict) else spec.tiers
+            line = spec.get("line_label") if isinstance(spec, dict) else spec.line_label
+            if tiers and not line:
+                for m in (spec.get("models") if isinstance(spec, dict) else spec.models) or []:
+                    _add(m)
+        gift = c.get("gift") if isinstance(c, dict) else getattr(c, "gift", None)
+        if gift:
+            opts = gift.get("options") if isinstance(gift, dict) else gift.options
+            for m in (opts or {}).values():
+                _add(m)
     return models
 
 
@@ -255,7 +264,7 @@ def build_brand_kit(
         brand_cands = [c for c in cands if _brand_of(c, brand)]
         ranked_per_spec.append(selector.ranked_candidates(spec, brand_cands))
 
-    special_models = _special_fridge_models(campaigns)
+    promo_models = _preferred_promo_models(campaigns)
 
     def pick(spec: ProductSpec, ranked: list[CatalogProduct],
              group: frozenset[str] | None) -> CatalogProduct | None:
@@ -266,11 +275,12 @@ def build_brand_kit(
             pool = [p for p in ranked if _product_colors(p) & group]
         if not pool:
             return None
-        # Спеццена холодильника: предпочитаем акционную модель (клиент модель не задал).
-        if special_models and spec.appliance is ApplianceType.FRIDGE and not spec.model:
+        # Акционные модели (спеццена холодильника / подарочная ПММ): предпочитаем,
+        # если позиция без явной модели клиента — они дают фикс-цену или −100%.
+        if promo_models and not spec.model:
             hot = next(
                 (p for p in pool
-                 if any(m.lower() in p.title.lower() for m in special_models)),
+                 if any(m.lower() in p.title.lower() for m in promo_models)),
                 None,
             )
             if hot is not None:

@@ -119,7 +119,8 @@ def test_parse_gift_sum_thresholds():
 def test_parse_gift_count_threshold():
     g = parse_gift(GIFT_COUNT)
     assert g.condition == "count"
-    assert g.options == {4: "MID45"}
+    # Модель целиком: обрезка до «MID45» матчила бы ЛЮБУЮ ПММ MID45* как подарок.
+    assert g.options == {4: "MID45S100I"}
 
 
 def test_parse_gift_choice_is_not_digitized():
