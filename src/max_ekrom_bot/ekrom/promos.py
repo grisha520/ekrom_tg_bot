@@ -70,6 +70,23 @@ class PromoItem:
 
 
 @dataclass
+class SpecPriceRule:
+    """«Доп. предмет по спеццене при комплекте» (главная механика оплаченных подборок).
+
+    Kuppersberg: «Из 3-х предметов → 4-й предмет по цене … RBN 1761 за 40 000 руб» →
+    tiers={3: 40000, 4: 27000}, models=["RBN 1761", "RBN 1965"]. Korting: «скидка 50%
+    на встраиваемый холодильник KSI 19547» → pct=50, models=["KSI 19547"]. line_label —
+    особое условие «духовой из линейки „Эксклюзив“»: проверить по каталогу нельзя
+    (шильдик на сайте), такие считаем с пометкой менеджеру.
+    """
+
+    models: list[str]
+    tiers: dict[int, float] = field(default_factory=dict)  # кол-во предметов → фикс-цена, руб
+    pct: float | None = None                                # либо −% на модель
+    line_label: str | None = None                           # «Эксклюзив» и т.п.
+
+
+@dataclass
 class GiftRule:
     """Оцифрованное условие подарочной акции (для сравнения со скидками).
 
@@ -99,6 +116,8 @@ class PromoCampaign:
     tiers: dict[int, float] = field(default_factory=dict)  # кол-во позиций → % скидки
     requires_oven: bool = False          # правило «в комплекте обязателен духовой шкаф»
     gift: GiftRule | None = None         # оцифрованное условие подарка (для механики gift)
+    spec: SpecPriceRule | None = None    # «доп. предмет по спеццене» (для spec_price)
+    exclusions: list[str] = field(default_factory=list)  # не участвуют: домино/отдельностоящ/…
     items: list[PromoItem] = field(default_factory=list)
 
 
@@ -238,6 +257,71 @@ def parse_gift(rules: str) -> "GiftRule | None":
     return None
 
 
+def parse_spec_price(rules: str) -> "SpecPriceRule | None":
+    """Оцифровать механику «доп. предмет по спеццене» из текста условий (или None).
+
+    Два шаблона с сайта:
+      • «Из <N>-х предметов → … <МОДЕЛЬ> за <цена> руб» (Kuppersberg, пороги 3/4);
+      • «скидка <P>% на встраиваемый холодильник <МОДЕЛЬ>» (Korting; в тексте
+        встречается разрыв «с кидка» из-за тега внутри слова — терпим к нему).
+    """
+    txt = _RE_WS.sub(" ", rules or "")
+    tiers: dict[int, float] = {}
+    models: list[str] = []
+    parts = re.split(r"(?i)из\s+(\d)\s*[-–]?\s*х?\s*предмет", txt)
+    for i in range(1, len(parts) - 1, 2):
+        n = int(parts[i])
+        for m in re.finditer(r"(" + _MODEL + r")\s*за\s*([\d\s]+?)\s*руб", parts[i + 1]):
+            price = float(re.sub(r"\D", "", m.group(2)) or 0)
+            model = _RE_WS.sub(" ", m.group(1)).strip()
+            if price and model:
+                tiers[n] = price
+                if model not in models:
+                    models.append(model)
+    line = re.search(r'линейк\w*\s*[«"]?\s*(эксклюзив\w*)', txt, re.I)
+    if tiers and models:
+        return SpecPriceRule(models=models, tiers=tiers,
+                             line_label=line.group(1).capitalize() if line else None)
+    m = re.search(
+        r"с\s?кидк\w*\s*(\d{1,3})\s*%\s*на\s+встраиваемый\s+холодильник\s+(" + _MODEL + r")",
+        txt, re.I,
+    )
+    if m:
+        return SpecPriceRule(models=[_RE_WS.sub(" ", m.group(2)).strip()],
+                             pct=float(m.group(1)),
+                             line_label=line.group(1).capitalize() if line else None)
+    return None
+
+
+# Формулировки «не участвуют» → канонический ключ исключения (для движка расчёта).
+_EXCLUSION_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"домино", "домино"),
+    (r"отдельностоящ", "отдельностоящая"),
+    (r"соло\s*свч", "соло-свч"),
+    (r"измельчител", "измельчитель"),
+    (r"соло\s*кофемашин", "соло-кофемашина"),
+    (r"(?:мелкой|малой)\s+бытовой|мбт\s+не\s+участ", "мбт"),
+)
+
+
+def parse_exclusions(rules: str) -> list[str]:
+    """Категории, НЕ участвующие в акции (влияют на счёт позиций и базу скидки).
+
+    Ловим только явные формулировки «не участвуют / кроме …» рядом с известными
+    словами — иначе упоминание категории в списке участников дало бы ложное исключение.
+    """
+    low = _RE_WS.sub(" ", (rules or "").lower())
+    out: list[str] = []
+    for pat, key in _EXCLUSION_PATTERNS:
+        for m in re.finditer(pat, low):
+            ctx = low[max(0, m.start() - 90):m.end() + 90]
+            if re.search(r"не\s+участв|кроме|исключ", ctx):
+                if key not in out:
+                    out.append(key)
+                break
+    return out
+
+
 def classify_mechanic(title: str, rules: str) -> str:
     """Классифицировать механику кампании по заголовку и тексту правил."""
     blob = f"{title} {rules}".lower()
@@ -288,21 +372,37 @@ def parse_campaign_items(html_text: str, base_url: str) -> list[PromoItem]:
     return items
 
 
-def _extract_h1(html_text: str) -> str:
+def _extract_title(html_text: str) -> str:
+    """Заголовок кампании: на страницах акций он в `.title--banner <h2>`, не в <h1>."""
+    m = re.search(r'title--banner[^>]*>\s*<h2[^>]*>(.*?)</h2>', html_text, re.S)
+    if m:
+        return _text(m.group(1))
     m = re.search(r"<h1[^>]*>(.*?)</h1>", html_text, re.S)
     return _text(m.group(1)) if m else ""
 
 
 def _extract_rules(html_text: str) -> str:
-    """Текст правил кампании — блок после H1 до начала мега-меню/списка товаров.
+    """Текст условий кампании — блок `<div class="action-descr__inner">` под баннером.
 
-    Разметка описания кампании непостоянна, поэтому берём отрезок от H1 и режем
-    по известным маркерам, где начинается «шум» (мега-меню каталога / витрина).
+    Раньше брали фрагмент «от <h1>», но на страницах акций заголовок лежит в
+    `.title--banner`, а условия — в `action-descr`, из-за чего часть кампаний
+    (в т.ч. «холодильник по спеццене») выглядела пустой. Фолбэк на старый способ
+    оставлен для нетипичной разметки; хвост режем по известным маркерам «шума».
     """
-    k = html_text.find("<h1")
-    if k < 0:
-        return ""
-    seg = _text(html_text[k : k + 4000])
+    k = html_text.find("action-descr__inner")
+    if k >= 0:
+        start = html_text.find(">", k) + 1
+        seg_raw = html_text[start : start + 12000]
+        # Начало следующего блока (список товаров/фильтр) — конец условий.
+        cut = seg_raw.find("<div class=")
+        if cut > 0:
+            seg_raw = seg_raw[:cut]
+        seg = _text(seg_raw)
+    else:
+        k = html_text.find("<h1")
+        if k < 0:
+            return ""
+        seg = _text(html_text[k : k + 4000])
     for marker in ("Комплекты для постирочной", "Товары, участвующие в акции",
                    "Аксессуары для кухонной"):
         seg = seg.split(marker)[0]
@@ -320,10 +420,13 @@ def parse_campaign(
     правил, зато на плитке есть заголовок и срок — используем их как запасной
     источник, иначе такие кампании остаются безымянными и не классифицируются.
     """
-    title = _extract_h1(html_text) or (title_hint or "")
+    title = _extract_title(html_text) or (title_hint or "")
     rules = _extract_rules(html_text)
     brand = brand_from_text(f"{slug} {title}")
-    mechanic = classify_mechanic(title, rules)
+    # Спеццена распознаётся ДО классификатора: в её тексте есть и «подарок», и
+    # «скидка N%», из-за чего классификатор уводит кампанию в gift/flat_combo.
+    spec = parse_spec_price(rules)
+    mechanic = PromoMechanic.SPEC_PRICE if spec else classify_mechanic(title, rules)
     pfrom, pto = parse_period(rules)
     if not (pfrom or pto) and period_hint:
         pfrom, pto = parse_period(period_hint)
@@ -342,8 +445,11 @@ def parse_campaign(
         rules_text=rules,
         tiers=parse_tiers(rules),
         requires_oven=bool(re.search(r"обязательн\w*\s+наличие\s+духов", low_rules)
-                           or re.search(r"духов\w+\s+шкаф\w*\s+должен", low_rules)),
+                           or re.search(r"духов\w+\s+шкаф\w*\s+должен", low_rules)
+                           or re.search(r"должен\s+присутствовать\s+духов", low_rules)),
         gift=parse_gift(rules) if mechanic == PromoMechanic.GIFT else None,
+        spec=spec,
+        exclusions=parse_exclusions(rules),
         items=items,
     )
 

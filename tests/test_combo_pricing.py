@@ -247,6 +247,109 @@ def test_gift_valuer_model_not_in_catalog_none():
     assert r.manager_review is True
 
 
+# ── Спеццена холодильника + подарок-вычет + исключения (эталоны менеджера) ────
+
+KUP_SPEC = {  # kuppersberg_kholodilnik_po_spets_tsene (условия с сайта)
+    "mechanic": "spec_price", "requires_oven": True, "slug": "kup_spec",
+    "tiers": {}, "gift": None,
+    "spec": {"models": ["RBN 1761", "RBN 1965"], "tiers": {3: 40000.0, 4: 27000.0},
+             "pct": None, "line_label": None},
+    "exclusions": ["домино", "отдельностоящая", "соло-свч", "измельчитель"],
+}
+
+
+def _fridge(price=97281):
+    return ComboItem("Встраиваемый холодильник Kuppersberg RBN 1965", price, "fridge",
+                     install="встраиваемый")
+
+
+def test_spec_price_four_items_fixed_27000():
+    # Эталон ИП Хорошев: комплект из 4+ предметов → холодильник за фикс-цену (ниж. порог 27 000).
+    items = [_oven(45000), _cooktop(25000), _hood(15000),
+             ComboItem("ПММ", 40000, "dishwasher"), _fridge(97281)]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied and r.mechanic == "spec_price"
+    assert r.discount_total == 97281 - 27000            # выгода = РРЦ − фикс
+    assert r.final_total == r.subtotal - r.discount_total
+    assert 4 in r.item_discounts or list(r.item_discounts) == [4]  # скидка на холодильник
+
+
+def test_spec_price_three_items_fixed_40000():
+    items = [_oven(45000), _cooktop(25000), _hood(15000), _fridge(97281)]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied and r.discount_total == 97281 - 40000
+
+
+def test_spec_price_requires_special_model():
+    # В комплекте холодильник НЕ спец-модели → акция не применяется, честная пометка.
+    items = [_oven(45000), _cooktop(25000), _hood(15000),
+             ComboItem("Встраиваемый холодильник Kuppersberg RBN 1765", 80396, "fridge")]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied is False and "RBN 1761" in r.note
+
+
+def test_spec_price_domino_not_counted():
+    # Домино не участвует: 2 обычных предмета + домино → порога 3 нет.
+    items = [_oven(45000),
+             ComboItem("Варочная панель домино", 12000, "cooktop", width_mm=288),
+             _hood(15000), _fridge(97281)]
+    r = compute_combo(items, KUP_SPEC)
+    assert r.applied is False and "от 3" in r.note
+
+
+def test_spec_price_korting_exclusive_line_manager_review():
+    camp = {"mechanic": "spec_price", "requires_oven": False, "slug": "kor50",
+            "tiers": {}, "gift": None, "exclusions": ["мбт"],
+            "spec": {"models": ["KSI 19547"], "tiers": {}, "pct": 50.0,
+                     "line_label": "Эксклюзив"}}
+    items = [_oven(50000), ComboItem("Встраиваемый холодильник Korting KSI 19547 CFNFZ",
+                                     94990, "fridge")]
+    r = compute_combo(items, camp)
+    assert r.manager_review is True and "Эксклюзив" in r.note
+
+
+def test_gift_inside_kit_deducted():
+    # Эталон Stefany: подарочная ПММ — одна из запрошенных позиций → −100% и ВЫЧЕТ.
+    camp = _Camp("gift", gift={"condition": "count", "options": {4: "MID45"}},
+                 requires_oven=True, slug="midea_pmm")
+    items = [_oven(40000), _cooktop(20000), _hood(15000),
+             ComboItem("Морозильник", 30000, "freezer"),
+             ComboItem("Посудомоечная машина Midea MID45S100i", 27990, "dishwasher")]
+    valuer = make_gift_valuer(lambda m: ("Посудомоечная машина Midea MID45S100i", 27990))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is True
+    assert r.item_discounts == {4: 100.0}               # ПММ обнулена
+    assert r.discount_total == 27990.0
+    assert r.final_total == r.subtotal - 27990.0        # подарок ВЫЧТЕН из итога
+
+
+def test_flat_combo_excludes_domino_from_base():
+    # Эталон Be-Art (Maunfeld): −11% на 4 акционные позиции, домино вне базы и счёта.
+    camp = _Camp("flat_combo", {3: 8, 4: 11, 5: 13}, slug="maunfeld")
+    camp.exclusions = ["домино", "соло-свч"]
+    items = [ComboItem("Стиральная машина", 61059, "washer"),
+             ComboItem("Духовой с СВЧ", 67660, "oven", is_oven=True),
+             ComboItem("Холодильник", 100990, "fridge"),
+             ComboItem("ПММ", 40390, "dishwasher"),
+             ComboItem("Варочная панель Maunfeld CVI292BK", 11100, "cooktop", width_mm=290)]
+    r = compute_combo(items, camp)
+    assert r.applied and r.combo_discount_pct == 11     # 4 участвующих → 11%
+    base = 61059 + 67660 + 100990 + 40390               # без домино
+    assert r.discount_total == round(base * 0.11, 2)    # 29 710.89 ≈ эталон 29 711
+    assert r.final_total == round(r.subtotal - r.discount_total, 2)
+
+
+def test_cascade_cheapest_skips_excluded():
+    # Каскад: наименьший выбирается среди УЧАСТВУЮЩИХ (домино пропускается).
+    camp = _Camp("cascade_cheapest", {2: 25}, slug="casc")
+    camp.exclusions = ["домино"]
+    items = [_oven(40000), _cooktop(20000),
+             ComboItem("Варочная домино", 9000, "cooktop2", width_mm=288)]
+    r = compute_combo(items, camp)
+    assert r.item_discounts == {1: 25}                  # скидка на 20000, не на домино
+    assert r.discount_total == 5000.0
+
+
 def test_best_combo_with_real_gift_valuer_vs_discount():
     # Бренд: каскад −25% на наименьший (20000→5000) vs подарок-кофеварка 8990. Подарок выгоднее.
     valuer = make_gift_valuer(_lookup)

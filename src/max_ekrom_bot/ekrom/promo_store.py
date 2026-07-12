@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .promos import GiftRule, PromoCampaign, PromoItem
+from .promos import GiftRule, PromoCampaign, PromoItem, SpecPriceRule
 
 
 def _gift_json(gift: GiftRule | None) -> str | None:
@@ -34,6 +34,27 @@ def _gift_from_json(raw: str | None) -> dict | None:
     d = json.loads(raw)
     return {"condition": d.get("condition"),
             "options": {int(k): v for k, v in (d.get("options") or {}).items()}}
+
+
+def _spec_json(spec: SpecPriceRule | None) -> str | None:
+    """Сериализовать правило «доп. предмет по спеццене» (или None)."""
+    if spec is None:
+        return None
+    return json.dumps(
+        {"models": spec.models, "tiers": {str(k): v for k, v in spec.tiers.items()},
+         "pct": spec.pct, "line_label": spec.line_label},
+        ensure_ascii=False,
+    )
+
+
+def _spec_from_json(raw: str | None) -> dict | None:
+    """Разобрать spec_json обратно в {models, tiers:{int:цена}, pct, line_label}."""
+    if not raw:
+        return None
+    d = json.loads(raw)
+    return {"models": d.get("models") or [],
+            "tiers": {int(k): v for k, v in (d.get("tiers") or {}).items()},
+            "pct": d.get("pct"), "line_label": d.get("line_label")}
 
 
 class PromoStore:
@@ -79,11 +100,12 @@ class PromoStore:
                     PRIMARY KEY (slug, url)
                 )"""
             )
-            # Миграция: столбец подарка мог отсутствовать в БД прошлой версии
+            # Миграция: новые столбцы могли отсутствовать в БД прошлой версии
             # (CREATE IF NOT EXISTS схему не меняет) — добавляем на месте.
             cols = {r[1] for r in c.execute("PRAGMA table_info(promo_campaigns)")}
-            if "gift_json" not in cols:
-                c.execute("ALTER TABLE promo_campaigns ADD COLUMN gift_json TEXT")
+            for col in ("gift_json", "spec_json", "exclusions_json"):
+                if col not in cols:
+                    c.execute(f"ALTER TABLE promo_campaigns ADD COLUMN {col} TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_promo_brand ON promo_campaigns(brand)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_promo_items_slug ON promo_items(slug)")
 
@@ -96,8 +118,9 @@ class PromoStore:
             c.executemany(
                 """INSERT INTO promo_campaigns
                    (slug,url,title,brand,mechanic,period_from,period_to,scope,
-                    requires_oven,tiers,gift_json,rules_text,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    requires_oven,tiers,gift_json,spec_json,exclusions_json,
+                    rules_text,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [
                     (
                         camp.slug, camp.url, camp.title, camp.brand, camp.mechanic,
@@ -105,6 +128,8 @@ class PromoStore:
                         1 if camp.requires_oven else 0,
                         json.dumps({str(k): v for k, v in camp.tiers.items()}, ensure_ascii=False),
                         _gift_json(camp.gift),
+                        _spec_json(camp.spec),
+                        json.dumps(camp.exclusions, ensure_ascii=False) if camp.exclusions else None,
                         camp.rules_text, now,
                     )
                     for camp in campaigns
@@ -138,6 +163,8 @@ class PromoStore:
             d["tiers"] = {int(k): v for k, v in json.loads(d.get("tiers") or "{}").items()}
             d["requires_oven"] = bool(d.get("requires_oven"))
             d["gift"] = _gift_from_json(d.get("gift_json"))
+            d["spec"] = _spec_from_json(d.get("spec_json"))
+            d["exclusions"] = json.loads(d.get("exclusions_json") or "[]")
             out.append(d)
         return out
 

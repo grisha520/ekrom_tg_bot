@@ -9,11 +9,19 @@
 применяет — менеджер ставит её вручную «Индивидуальной скидкой». Механику берём из
 правил кампании (распознаны на Ф1), а не с сайта.
 
-Механики:
+Механики (сверены с оплаченными подборками менеджера):
   • cascade_cheapest — % на НАИМЕНЬШИЙ по стоимости товар, % растёт с числом позиций;
-  • flat_combo       — плоский % на весь подытог, % растёт с числом позиций;
-  • gift/spec_price/unknown — авто-итог не гарантирован → manager_review=True;
+  • flat_combo       — плоский % на участвующие позиции, % растёт с их числом;
+  • spec_price       — доп. предмет (холодильник конкретной модели) по фикс-цене
+                       при комплекте из N предметов (Kuppersberg 3→40 000/4→27 000);
+  • gift             — подарок: если модель подарка — одна из ЗАПРОШЕННЫХ позиций,
+                       она обнуляется (−100%) и ВЫЧИТАЕТСЯ из итога (как в оплаченных
+                       PDF); иначе подарок идёт сверху бесплатно (сумму не меняет);
+  • unknown/showcase — авто-итог не гарантирован → manager_review=True;
   • нет кампании (напр. Lex) — скидки нет, итог = сумма цен.
+
+Исключения кампаний («домино/отдельностоящие/соло-СВЧ/… не участвуют») выводят
+позицию из счёта предметов и из базы скидки — как делает менеджер в эталонах.
 """
 
 from __future__ import annotations
@@ -23,13 +31,15 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ComboItem:
-    """Позиция комплекта для расчёта (цена + товарная категория)."""
+    """Позиция комплекта для расчёта (цена + признаки для правил акций)."""
 
     title: str
     price: float
     category: str            # товарная категория (для правила «разных категорий»)
     is_oven: bool = False    # духовой шкаф (некоторые акции требуют его в комплекте)
     url: str | None = None
+    width_mm: int | None = None      # ширина (домино <350 мм не участвует в акциях)
+    install: str | None = None       # «встраиваемый» / «отдельностоящий» (для исключений)
 
 
 @dataclass
@@ -37,9 +47,9 @@ class ComboResult:
     """Итог расчёта комплекта: суммы + как именно ложится выгода.
 
     `discount_total` — это ВЫГОДА комплекта в рублях (для сравнения акций между
-    собой): у скидочных механик = размер скидки (и `final_total = subtotal −
-    discount_total`), у подарка = цена подарка (а `final_total = subtotal`, ведь
-    подарок идёт СВЕРХУ бесплатно и сумму комплекта не уменьшает).
+    собой). У скидочных механик и подарка-внутри-комплекта `final_total = subtotal −
+    discount_total`; у подарка СВЕРХУ (модель подарка не входит в запрошенные
+    позиции) `final_total = subtotal` — подарок бесплатный и сумму не меняет.
     """
 
     mechanic: str
@@ -48,15 +58,50 @@ class ComboResult:
     final_total: float
     applied: bool = False                       # применена ли акция (скидка/подарок)
     combo_discount_pct: float | None = None     # flat_combo: единый % на подытог
-    item_discounts: dict[int, float] = field(default_factory=dict)  # индекс позиции → % (каскад)
-    gift_title: str | None = None               # подарок: название (сумму НЕ уменьшает)
+    item_discounts: dict[int, float] = field(default_factory=dict)  # индекс позиции → % скидки
+    gift_title: str | None = None               # подарок: название
     note: str = ""                              # пояснение (условие/уточнение менеджера)
     manager_review: bool = False                # True → авто-итогу нельзя доверять как финалу
     campaign_slug: str | None = None            # какая акция дала этот результат
 
 
 # Механики, чей итог автоматически считать нельзя — их размечаем на менеджера.
+# (spec_price сюда попадает только если правило не распарсилось из условий.)
 _MANAGER_REVIEW = {"gift", "spec_price", "unknown", "showcase"}
+
+
+def _matches_model(item: ComboItem, models: list[str]) -> bool:
+    """Совпадает ли позиция с одной из моделей правила (по подстроке названия)."""
+    low = (item.title or "").lower()
+    return any(m and m.lower() in low for m in models)
+
+
+def _excluded(item: ComboItem, exclusions: list[str]) -> bool:
+    """Выведена ли позиция из акции правилом «не участвуют» этой кампании."""
+    low = (item.title or "").lower()
+    cat = (item.category or "").lower()
+    for key in exclusions:
+        if key == "домино":
+            is_cooktop = "cooktop" in cat or "вароч" in cat or "вароч" in low
+            narrow = item.width_mm is not None and item.width_mm < 350
+            if is_cooktop and (narrow or "домино" in low):
+                return True
+        elif key == "отдельностоящая":
+            if (item.install or "") == "отдельностоящий":
+                return True
+        elif key == "соло-свч":
+            is_mw = "microwave" in cat or "свч" in low or "микроволнов" in low
+            if is_mw and (item.install or "") == "отдельностоящий":
+                return True
+        elif key == "измельчитель":
+            if "измельчит" in low or "измельчит" in cat:
+                return True
+        elif key == "соло-кофемашина":
+            if "кофемашин" in low and (item.install or "") == "отдельностоящий":
+                return True
+        # «мбт»: клиентские позиции комплекта — крупная техника; надёжного
+        # признака мелкой бытовой техники в данных нет, не отсекаем.
+    return False
 
 
 def _tier_for(tiers: dict[int, float], count: int) -> float | None:
@@ -95,15 +140,43 @@ def compute_combo(
     mechanic = _get(campaign, "mechanic", "unknown")
     tiers = _get(campaign, "tiers", {}) or {}
     requires_oven = bool(_get(campaign, "requires_oven", False))
+    exclusions = list(_get(campaign, "exclusions", []) or [])
     base.mechanic = mechanic
 
+    # Позиции, участвующие в акции (правило «домино/отдельностоящие/… не участвуют»):
+    # только они идут в счёт предметов и в базу скидки — как в эталонных подборках.
+    part = [k for k, it in enumerate(items) if not _excluded(it, exclusions)]
+
+    # «Доп. предмет по спеццене» (холодильник конкретной модели) — считается по
+    # распарсенному правилу; без правила падаем в manager_review ниже.
+    spec = _get(campaign, "spec", None)
+    if mechanic == "spec_price" and spec:
+        return _compute_spec_price(items, part, spec, base, requires_oven)
+
     # Механики, которые численно не считаем как скидку — на менеджера. Исключение:
-    # подарок можно оцифровать через gift_value (выгода = цена подарка, сверху бесплатно).
+    # подарок оцифровывается через gift_value (модель + цена из каталога).
     if mechanic in _MANAGER_REVIEW:
         if mechanic == "gift" and gift_value is not None:
             g = gift_value(campaign, items)
             if g and g[1]:
                 title, price = g[0], round(float(g[1]), 2)
+                model = g[2] if len(g) > 2 else None
+                # Подарок — одна из ЗАПРОШЕННЫХ позиций? Тогда она обнуляется и
+                # ВЫЧИТАЕТСЯ из итога (эталон: ПММ за 0/1 ₽, «Скидка −100%»).
+                gidx = next(
+                    (k for k, it in enumerate(items)
+                     if model and model.lower() in (it.title or "").lower()),
+                    None,
+                )
+                if gidx is not None:
+                    discount = round(items[gidx].price, 2)
+                    return ComboResult(
+                        mechanic=mechanic, subtotal=subtotal, discount_total=discount,
+                        final_total=round(subtotal - discount, 2), applied=True,
+                        gift_title=items[gidx].title, item_discounts={gidx: 100.0},
+                        campaign_slug=slug,
+                        note=f"{items[gidx].title} — в подарок (скидка −100%).",
+                    )
                 return ComboResult(
                     mechanic=mechanic, subtotal=subtotal, discount_total=price,
                     final_total=subtotal, applied=True, gift_title=title,
@@ -114,8 +187,8 @@ def compute_combo(
         base.note = "Точный итог по этой акции уточнит менеджер."
         return base
 
-    # Комплектные скидки требуют РАЗНЫХ товарных категорий — считаем по их числу.
-    distinct = len({i.category for i in items})
+    # Комплектные скидки требуют РАЗНЫХ товарных категорий среди УЧАСТВУЮЩИХ позиций.
+    distinct = len({items[k].category for k in part})
     if requires_oven and not any(i.is_oven for i in items):
         base.note = "Для скидки по акции в комплекте нужен духовой шкаф."
         return base
@@ -126,30 +199,108 @@ def compute_combo(
         base.note = f"Скидка по акции — от {min_n} позиций из разных категорий."
         return base
 
+    excl_note = ""
+    if len(part) < len(items):
+        excl_note = f" (без {len(items) - len(part)} поз. вне акции)"
+
     if mechanic == "cascade_cheapest":
-        # Скидка на НАИМЕНЬШИЙ по стоимости товар.
-        idx = min(range(len(items)), key=lambda k: items[k].price)
+        # Скидка на НАИМЕНЬШИЙ по стоимости УЧАСТВУЮЩИЙ товар.
+        idx = min(part, key=lambda k: items[k].price)
         discount = round(items[idx].price * pct / 100, 2)
         return ComboResult(
             mechanic=mechanic, subtotal=subtotal, discount_total=discount,
             final_total=round(subtotal - discount, 2), applied=True,
             item_discounts={idx: pct}, campaign_slug=slug,
-            note=f"Скидка −{_pct(pct)}% на самый недорогой товар в комплекте.",
+            note=f"Скидка −{_pct(pct)}% на самый недорогой товар в комплекте{excl_note}.",
         )
 
     if mechanic == "flat_combo":
-        discount = round(subtotal * pct / 100, 2)
+        # Плоский % на УЧАСТВУЮЩИЕ позиции (эталон: домино в базу не входит).
+        pbase = round(sum(items[k].price for k in part), 2)
+        discount = round(pbase * pct / 100, 2)
         return ComboResult(
             mechanic=mechanic, subtotal=subtotal, discount_total=discount,
             final_total=round(subtotal - discount, 2), applied=True,
-            combo_discount_pct=pct, campaign_slug=slug,
-            note=f"Скидка −{_pct(pct)}% на комплект из {distinct} позиций.",
+            combo_discount_pct=pct,
+            item_discounts={k: pct for k in part} if len(part) < len(items) else {},
+            campaign_slug=slug,
+            note=f"Скидка −{_pct(pct)}% на комплект из {distinct} позиций{excl_note}.",
         )
 
     # На всякий случай: незнакомая механика — на менеджера.
     base.manager_review = True
     base.note = "Точный итог по этой акции уточнит менеджер."
     return base
+
+
+def _compute_spec_price(
+    items: list[ComboItem], part: list[int], spec: object, base: ComboResult,
+    requires_oven: bool,
+) -> ComboResult:
+    """Механика «доп. предмет по спеццене»: холодильник модели X за фикс-цену.
+
+    Правило Kuppersberg: комплект из N УЧАСТВУЮЩИХ предметов (духовой обязателен)
+    → следующий предмет — холодильник RBN … — за фикс-цену; выгода = РРЦ − фикс.
+    Вариант Korting (−pct% на модель) требует духовой из линейки «Эксклюзив» —
+    принадлежность линейке по каталогу не проверить, поэтому честно отдаём менеджеру.
+    """
+    models = list(_get(spec, "models", []) or [])
+    price_tiers = {int(k): float(v) for k, v in (_get(spec, "tiers", {}) or {}).items()}
+    pct = _get(spec, "pct", None)
+    line_label = _get(spec, "line_label", None)
+
+    # Спец-предмет (холодильник) среди позиций комплекта.
+    sidx = next((k for k, it in enumerate(items) if _matches_model(it, models)), None)
+    if sidx is None:
+        base.note = ("Для этой акции в комплекте нужен холодильник "
+                     + " / ".join(models) + ".")
+        return base
+
+    if pct is not None and line_label:
+        # Условие «духовой из линейки „Эксклюзив“» не проверить по данным каталога.
+        base.manager_review = True
+        base.note = (f"Возможна скидка −{_pct(float(pct))}% на холодильник "
+                     f"{items[sidx].title}: нужен духовой шкаф линейки "
+                     f"«{line_label}» — подтвердит менеджер.")
+        return base
+
+    if requires_oven and not any(i.is_oven for i in items):
+        base.note = "Для спеццены холодильника в комплекте нужен духовой шкаф."
+        return base
+
+    # Число УЧАСТВУЮЩИХ предметов БЕЗ самого спец-предмета (он идёт N+1-м).
+    others = [k for k in part if k != sidx]
+    distinct = len({items[k].category for k in others})
+    catalog_price = items[sidx].price
+
+    if pct is not None:
+        discount = round(catalog_price * float(pct) / 100, 2)
+        n_required = 1
+        ok = distinct >= n_required
+        fixed = catalog_price - discount
+    else:
+        eligible = [n for n in price_tiers if distinct >= n]
+        ok = bool(eligible)
+        fixed = price_tiers[max(eligible)] if eligible else None
+        discount = round(catalog_price - fixed, 2) if fixed is not None else 0.0
+
+    if not ok:
+        min_n = min(price_tiers) if price_tiers else 1
+        base.note = (f"Спеццена холодильника — при комплекте от {min_n} предметов "
+                     "разных категорий (без учёта позиций вне акции).")
+        return base
+    if discount <= 0:
+        base.note = "Спеццена не даёт выгоды против текущей цены холодильника."
+        return base
+
+    return ComboResult(
+        mechanic="spec_price", subtotal=base.subtotal, discount_total=discount,
+        final_total=round(base.subtotal - discount, 2), applied=True,
+        item_discounts={sidx: round(discount / catalog_price * 100, 2)},
+        campaign_slug=base.campaign_slug,
+        note=(f"{items[sidx].title} — по спеццене {_fmt(fixed)} "
+              f"при комплекте из {distinct} предметов."),
+    )
 
 
 def best_combo(
@@ -177,7 +328,9 @@ def make_gift_valuer(catalog_lookup: object):
 
     `catalog_lookup(model) → (название, цена) | None` — поиск подарка в каталоге по
     ключу модели (напр. `CatalogCache.find_by_model`). Возвращает callable(campaign,
-    items) → (название, цена) | None, пригодный как аргумент `gift_value`.
+    items) → (название, цена, ключ_модели) | None, пригодный как аргумент `gift_value`.
+    Ключ модели нужен движку, чтобы понять: подарок — одна из позиций комплекта
+    (тогда −100% и вычет) или идёт сверху бесплатно.
 
     Условие подарка берётся из `campaign.gift` (оцифровано на Ф1: sum/count + пороги
     → модель). Проверяем порог (сумма комплекта / число разных категорий) и, для
@@ -198,10 +351,11 @@ def make_gift_valuer(catalog_lookup: object):
         eligible = [thr for thr in opts if metric >= thr]
         if not eligible:
             return None
-        found = catalog_lookup(opts[max(eligible)])
+        model = opts[max(eligible)]
+        found = catalog_lookup(model)
         if not found or not found[1]:
             return None
-        return found[0], float(found[1])
+        return found[0], float(found[1]), model
 
     return valuer
 
