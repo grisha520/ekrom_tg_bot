@@ -377,6 +377,10 @@ def format_kit(kit: object, settings: Settings) -> str:
     for m in kit.selection.matched:
         p = m.product
         lines.append(f"• <b>{html.escape(p.title)}</b> — {_fmt_price(p.price or 0)}")
+        if m.reason:
+            # Позиция закрыта заменой (например, дороже бюджета) — клиент должен
+            # видеть это ДО разговора с менеджером, а не удивляться в счёте.
+            lines.append(f"  <i>⚠ {html.escape(m.reason)}</i>")
     for m in kit.selection.unmatched:
         pos = html.escape(m.spec.raw_text or "позиция")
         lines.append(f"• <i>{pos}: у бренда не нашлось подходящего</i>")

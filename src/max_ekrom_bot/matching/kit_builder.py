@@ -316,9 +316,16 @@ def build_brand_kit(
             chosen = pick(spec, ranked, group)
             miss = (f"У бренда {brand} нет позиции"
                     + (" в этой цветовой гамме" if group else "") + " под этот пункт")
+            # Честная пометка о превышении бюджета клиента: у бренда не нашлось
+            # варианта в потолке цены — замену показываем, но НЕ молча (e2e-прогон
+            # поймал духовку за 40 990 на запрос «до 30000» без предупреждения).
+            reason = ""
+            if chosen and spec.max_price and (chosen.price or 0) > spec.max_price:
+                reason = (f"Дороже бюджета (до {spec.max_price:,} ₽) — ближайший "
+                          f"вариант бренда".replace(",", " "))
             items.append(MatchedItem(
                 spec=spec, product=chosen, candidates_count=len(ranked),
-                reason="" if chosen else miss,
+                reason=reason if chosen else miss,
             ))
         return items
 

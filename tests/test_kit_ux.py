@@ -113,3 +113,29 @@ def test_kit_promo_line_without_deadline():
 
     line = _promo_line(_C())
     assert "Midea" in line and "действует до" not in line
+
+
+def test_format_kit_shows_replacement_reason():
+    # Пометка «дороже бюджета» из kit_builder должна дойти до клиента.
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.matching.combo_pricing import compute_combo
+    from max_ekrom_bot.matching.kit_builder import BrandKit
+    from max_ekrom_bot.messenger.client_ux import format_kit
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    spec = ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовка до 30000",
+                       max_price=30000)
+    item = MatchedItem(
+        spec=spec,
+        product=CatalogProduct(title="Духовой шкаф Korting OKB 3810", url="u",
+                               price=40990),
+        candidates_count=3,
+        reason="Дороже бюджета (до 30 000 ₽) — ближайший вариант бренда",
+    )
+    kit = BrandKit(brand="Korting", selection=SelectionResult(items=[item]),
+                   combo=compute_combo([], None), requested=1, coverage=1,
+                   design_consistent=True)
+    text = format_kit(kit, Settings(telegram_bot_token="x"))
+    assert "Дороже бюджета" in text

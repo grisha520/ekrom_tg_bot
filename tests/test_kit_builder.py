@@ -335,3 +335,26 @@ def test_kit_picks_gift_model_of_reachable_tier():
     titles = [m.product.title for m in kit.selection.matched]
     assert any("KHI 6393" in t for t in titles)      # вытяжка порога 2 — взята
     assert not any("OKB 3810" in t for t in titles)  # духовка порога 3 — не навязана
+
+
+def test_over_budget_replacement_is_flagged():
+    # E2E-прогон на проде: «духовка до 30000» молча закрывалась моделью за 40 990.
+    # Замена допустима (полнота комплекта важнее), но обязана быть помечена.
+    specs = [_spec(OVEN, max_price=30000), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40990)],   # дешевле у бренда нет
+        [_p("Korting", "Варочная панель", 12290)],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    oven_item = kit.selection.matched[0]
+    assert oven_item.product is not None
+    assert "бюджет" in oven_item.reason.lower()
+    # Позиция в бюджете — без пометки.
+    assert kit.selection.matched[1].reason == ""
+
+
+def test_within_budget_no_flag():
+    specs = [_spec(OVEN, max_price=50000)]
+    cands = [[_p("Korting", "Духовой шкаф", 40990)]]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert kit.selection.matched[0].reason == ""
