@@ -335,6 +335,33 @@ def kit_welcome_text(settings: Settings) -> str:
     )
 
 
+def _ru_date(iso: str | None) -> str:
+    """ISO-дата → «30.09.2026» (пустая строка, если даты нет или формат чужой)."""
+    if not iso:
+        return ""
+    parts = str(iso).split("-")
+    if len(parts) != 3:
+        return ""
+    y, m, d = parts
+    return f"{d}.{m}.{y}" if len(y) == 4 else ""
+
+
+def _promo_line(combo: object) -> str:
+    """Строка «Акция: <название> (до <дата>)» — или пусто, если акции нет.
+
+    Показываем только когда акция реально что-то дала (скидка/подарок) либо ушла
+    на подтверждение менеджеру: иначе клиент увидит название кампании там, где
+    выгоды нет, и решит, что его обсчитали.
+    """
+    title = getattr(combo, "campaign_title", None)
+    if not title or not (getattr(combo, "applied", False)
+                         or getattr(combo, "manager_review", False)):
+        return ""
+    until = _ru_date(getattr(combo, "campaign_period_to", None))
+    tail = f" — действует до {until}" if until else ""
+    return f"<i>Акция: {html.escape(str(title))}{tail}</i>"
+
+
 def format_kit(kit: object, settings: Settings) -> str:
     """Клиентское превью собранного комплекта: бренд, позиции, выгода, дизайн."""
     shop = html.escape(settings.shop_name)
@@ -367,6 +394,12 @@ def format_kit(kit: object, settings: Settings) -> str:
         lines.append(f"К оплате: <b>{_fmt_price(combo.final_total)}</b>")
     elif combo.manager_review:
         lines.append("<i>По этой акции точную выгоду подтвердит менеджер.</i>")
+
+    # Какая именно акция сработала и до какого числа: клиент видит, что предложение
+    # ограничено по сроку, а менеджер — по какой кампании считать.
+    promo_line = _promo_line(combo)
+    if promo_line:
+        lines.append(promo_line)
 
     if kit.design_note:
         lines.append("")

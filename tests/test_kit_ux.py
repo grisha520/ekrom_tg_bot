@@ -70,3 +70,46 @@ def test_kit_pdf_keyboard_and_welcome():
     kb = kit_pdf_keyboard("tok123")
     assert kb.inline_keyboard[0][0].callback_data == "kitpdf:tok123"
     assert "комплект" in kit_welcome_text(_S).lower()
+
+
+def test_kit_shows_campaign_title_and_deadline():
+    # Клиент должен видеть, ПО КАКОЙ акции посчитано и до какого числа она жива.
+    from max_ekrom_bot.messenger.client_ux import _promo_line
+
+    class _C:
+        campaign_title = "Korting: Формула выгоды"
+        campaign_period_to = "2026-09-30"
+        applied = True
+        manager_review = False
+
+    line = _promo_line(_C())
+    assert "Korting: Формула выгоды" in line
+    assert "до 30.09.2026" in line
+
+
+def test_kit_promo_line_hidden_without_benefit():
+    # Акция не сработала (Lex/нет тарифа) — название кампании не показываем,
+    # иначе клиент решит, что скидку потеряли.
+    from max_ekrom_bot.messenger.client_ux import _promo_line
+
+    class _C:
+        campaign_title = "Korting: Каскадные скидки"
+        campaign_period_to = "2026-09-30"
+        applied = False
+        manager_review = False
+
+    assert _promo_line(_C()) == ""
+
+
+def test_kit_promo_line_without_deadline():
+    # Акция с открытым сроком («до уведомления») — только название, без даты.
+    from max_ekrom_bot.messenger.client_ux import _promo_line
+
+    class _C:
+        campaign_title = "Midea: каскадные скидки!"
+        campaign_period_to = None
+        applied = True
+        manager_review = False
+
+    line = _promo_line(_C())
+    assert "Midea" in line and "действует до" not in line

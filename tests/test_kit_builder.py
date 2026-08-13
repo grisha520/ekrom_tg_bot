@@ -283,3 +283,50 @@ def test_choose_best_kit_none_when_all_foreign(tmp_path=None):
     specs = [_spec(OVEN)]
     cands = [[_p("Smeg", "Духовой шкаф", 90000)]]
     assert choose_best_kit(specs, cands, lambda b: []) is None
+
+
+# Подарок-лестница Korting «Формула выгоды»: 2 прибора → вытяжка, 3 → духовой,
+# 4 → ПММ. Выдаётся ровно ОДИН подарок — по максимальному достижимому порогу.
+LADDER = {"mechanic": "gift", "tiers": {}, "requires_oven": False, "slug": "formula",
+          "spec": None,
+          "gift": {"condition": "count",
+                   "options": {2: "KHI 6393", 3: "OKB 3810", 4: "KDI 45140"}}}
+
+
+def test_promo_preference_uses_reachable_gift_tier_only():
+    from max_ekrom_bot.matching.kit_builder import _preferred_promo_models
+
+    # 3 позиции → подарок по порогу 3 (духовой шкаф), а не все три модели сразу.
+    assert _preferred_promo_models([LADDER], 3) == ["OKB 3810"]
+    assert _preferred_promo_models([LADDER], 2) == ["KHI 6393"]
+    assert _preferred_promo_models([LADDER], 5) == ["KDI 45140"]
+    # Порог не достигнут — предпочитать нечего.
+    assert _preferred_promo_models([LADDER], 1) == []
+
+
+def test_promo_preference_keeps_all_models_for_sum_gifts():
+    from max_ekrom_bot.matching.kit_builder import _preferred_promo_models
+
+    # Порог по СУММЕ покупки заранее не проверить — оставляем все модели.
+    sum_gift = {"mechanic": "gift", "slug": "s", "spec": None,
+                "gift": {"condition": "sum", "options": {10000: "KWK 0902", 25000: "KHB 0315"}}}
+    assert _preferred_promo_models([sum_gift], 2) == ["KWK 0902", "KHB 0315"]
+
+
+def test_kit_picks_gift_model_of_reachable_tier():
+    # Клиент просит духовку/варочную/вытяжку (3 позиции). Подарок на этом пороге —
+    # духовой шкаф OKB 3810: его и ставим, хотя вытяжка KHI 6393 тоже есть в пуле.
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000),
+         CatalogProduct(title="Духовой шкаф Korting OKB 3810 FGN чёрный",
+                        url="u/korting/oven/okb", price=44000)],
+        [_p("Korting", "Варочная панель", 25000)],
+        [_p("Korting", "Вытяжка", 15000),
+         CatalogProduct(title="Вытяжка Korting KHI 6393 N чёрный",
+                        url="u/korting/hood/khi", price=19000)],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [LADDER])
+    titles = [m.product.title for m in kit.selection.matched]
+    assert any("OKB 3810" in t for t in titles)      # подарочный духовой — взят
+    assert not any("KHI 6393" in t for t in titles)  # вытяжка порога 2 — не навязана

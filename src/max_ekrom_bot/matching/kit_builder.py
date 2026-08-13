@@ -126,12 +126,20 @@ def _brand_of(product: CatalogProduct, brand: str) -> bool:
     return b in (product.title or "").lower() or b in (product.brand or "").lower()
 
 
-def _preferred_promo_models(campaigns: list) -> list[str]:
+def _preferred_promo_models(campaigns: list, positions: int = 0) -> list[str]:
     """Модели, которые выгодно ставить в комплект по акциям бренда.
 
     Спеццена (RBN 1761/1965 — фикс-цена при комплекте) и подарочные модели
     (MID45S100I — −100%, если она закрывает запрошенную позицию). Правила с
     линейкой «Эксклюзив» не предпочитаем — условие не проверить по каталогу.
+
+    `positions` — сколько РАЗНЫХ товарных категорий в запросе клиента. Для
+    подарков-лестниц («2 прибора → вытяжка, 3 → духовой, 4 → ПММ» у Korting)
+    выдаётся ровно ОДИН подарок — по максимальному достижимому порогу. Без учёта
+    порога в предпочтение попадали все три модели сразу, и комплект уводило к
+    моделям, которые в этом размере комплекта подарком не станут. Пороги по СУММЕ
+    покупки заранее не проверить (цены ещё не выбраны) — такие модели оставляем
+    все, финальное условие всё равно проверит оцифровщик подарка.
     """
     models: list[str] = []
 
@@ -149,8 +157,14 @@ def _preferred_promo_models(campaigns: list) -> list[str]:
                     _add(m)
         gift = c.get("gift") if isinstance(c, dict) else getattr(c, "gift", None)
         if gift:
-            opts = gift.get("options") if isinstance(gift, dict) else gift.options
-            for m in (opts or {}).values():
+            cond = gift.get("condition") if isinstance(gift, dict) else gift.condition
+            opts = (gift.get("options") if isinstance(gift, dict) else gift.options) or {}
+            if cond == "count":
+                reachable = [t for t in opts if t <= positions]
+                if reachable:
+                    _add(opts[max(reachable)])
+                continue
+            for m in opts.values():
                 _add(m)
     return models
 
@@ -270,7 +284,9 @@ def build_brand_kit(
         brand_cands = [c for c in cands if _brand_of(c, brand)]
         ranked_per_spec.append(selector.ranked_candidates(spec, brand_cands))
 
-    promo_models = _preferred_promo_models(campaigns)
+    # Порог подарка считается по РАЗНЫМ товарным категориям — так же, как в
+    # оцифровщике подарка (make_gift_valuer), иначе предпочли бы недостижимую модель.
+    promo_models = _preferred_promo_models(campaigns, len({_spec_category(s) for s in specs}))
 
     def pick(spec: ProductSpec, ranked: list[CatalogProduct],
              group: frozenset[str] | None) -> CatalogProduct | None:
