@@ -205,15 +205,28 @@ def compute_combo(
                     None,
                 )
                 if gidx is not None:
-                    discount = round(items[gidx].price, 2)
-                    # replace() сохраняет «паспорт» акции (slug/название/срок) —
-                    # его показываем клиенту вместе с выгодой.
-                    return replace(
-                        base, discount_total=discount,
-                        final_total=round(subtotal - discount, 2), applied=True,
-                        gift_title=items[gidx].title, item_discounts={gidx: 100.0},
-                        note=f"{items[gidx].title} — в подарок (скидка −100%).",
-                    )
+                    # Порог обязан выполняться ОПЛАЧЕННЫМИ позициями — без самой
+                    # подарочной (эталон Stefany: ПММ шла пятой при пороге 4;
+                    # спеццена считает others так же). Валуер на остатке должен
+                    # дать ТУ ЖЕ модель: у лестниц меньший порог дарит другое.
+                    paid = [it for k, it in enumerate(items) if k != gidx]
+                    g_paid = gift_value(campaign, paid)
+                    if g_paid and len(g_paid) > 2 and g_paid[2] == model:
+                        discount = round(items[gidx].price, 2)
+                        # replace() сохраняет «паспорт» акции (slug/название/
+                        # срок) — его показываем клиенту вместе с выгодой.
+                        return replace(
+                            base, discount_total=discount,
+                            final_total=round(subtotal - discount, 2), applied=True,
+                            gift_title=items[gidx].title, item_discounts={gidx: 100.0},
+                            note=f"{items[gidx].title} — в подарок (скидка −100%).",
+                        )
+                    # Оплаченных не хватает на этот подарок — не обещаем −100%,
+                    # честно отдаём менеджеру (клиент может добрать позицию).
+                    base.manager_review = True
+                    base.note = ("Подарок по акции требует больше оплаченных "
+                                 "приборов — условия подтвердит менеджер.")
+                    return base
                 return replace(
                     base, discount_total=price,
                     final_total=subtotal, applied=True, gift_title=title,
@@ -371,6 +384,10 @@ def make_gift_valuer(catalog_lookup: object):
     Условие подарка берётся из `campaign.gift` (оцифровано на Ф1: sum/count + пороги
     → модель). Проверяем порог (сумма комплекта / число разных категорий) и, для
     акций с обязательным духовым шкафом, его наличие. Не выполнено/не нашли цену → None.
+
+    Порог считается по УЧАСТВУЮЩИМ позициям: исключённые правилами кампании
+    (домино/соло-СВЧ/…) не приближают подарок ни числом, ни суммой — иначе бот
+    обещал бы подарок, на который клиент не наработал.
     """
     def valuer(campaign: object, items: list[ComboItem]):
         gift = _get(campaign, "gift", None)
@@ -382,8 +399,10 @@ def make_gift_valuer(catalog_lookup: object):
             return None
         if bool(_get(campaign, "requires_oven", False)) and not any(i.is_oven for i in items):
             return None
-        metric = (round(sum(i.price for i in items), 2) if cond == "sum"
-                  else len({i.category for i in items}))
+        exclusions = list(_get(campaign, "exclusions", []) or [])
+        part = [i for i in items if not _excluded(i, exclusions)]
+        metric = (round(sum(i.price for i in part), 2) if cond == "sum"
+                  else len({i.category for i in part}))
         eligible = [thr for thr in opts if metric >= thr]
         if not eligible:
             return None

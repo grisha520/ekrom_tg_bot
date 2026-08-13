@@ -384,13 +384,26 @@ def test_spec_price_no_benefit_if_fridge_cheaper_than_fixed():
 
 
 def test_gift_deducts_expensive_position():
-    # Подарок — дорогая позиция комплекта → обнуляется именно она.
+    # Подарок — дорогая позиция комплекта → обнуляется она, но лишь когда порог
+    # выполнен ОПЛАЧЕННЫМИ: при 3 позициях (порог 2) обнуление холодильника
+    # оставляет 2 оплаченных — законно.
+    camp = _Camp("gift", gift={"condition": "count", "options": {2: "BIG-500"}}, slug="g")
+    items = [_oven(30000), _cooktop(20000), ComboItem("Холодильник BIG-500", 90000, "fridge")]
+    valuer = make_gift_valuer(lambda m: ("Холодильник BIG-500", 90000))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.item_discounts == {2: 100.0} and r.discount_total == 90000.0
+    assert r.final_total == r.subtotal - 90000
+
+
+def test_gift_no_free_lunch_on_two_positions():
+    # А вот «купи 1 — получи холодильник за 90 000 бесплатно» бот не обещает:
+    # обнуление при 2 позициях оставляет 1 оплаченную < порога 2 → менеджер.
     camp = _Camp("gift", gift={"condition": "count", "options": {2: "BIG-500"}}, slug="g")
     items = [_oven(30000), ComboItem("Холодильник BIG-500", 90000, "fridge")]
     valuer = make_gift_valuer(lambda m: ("Холодильник BIG-500", 90000))
     r = compute_combo(items, camp, gift_value=valuer)
-    assert r.item_discounts == {1: 100.0} and r.discount_total == 90000.0
-    assert r.final_total == r.subtotal - 90000
+    assert r.applied is False and r.manager_review is True
+    assert r.discount_total == 0.0
 
 
 def test_best_combo_spec_price_beats_flat():
@@ -469,3 +482,85 @@ def test_unspecified_scope_ignores_listed_urls():
                        url="https://www.ekrom.ru/products/cooktop-b/")]
     r = compute_combo(items, camp)
     assert r.applied is True and r.combo_discount_pct == 5
+
+
+# ── Честность подарка: пороги по ОПЛАЧЕННЫМ и УЧАСТВУЮЩИМ позициям ────────────
+# Эталон Stefany: подарочная ПММ была ПЯТОЙ позицией — порог 4 выполняли четыре
+# оплаченных прибора. Спеццена уже считает так (others без спец-предмета);
+# подарок обязан считать так же, иначе бот обещает подарок, на который клиент
+# не наработал.
+
+def test_gift_excluded_items_do_not_count_toward_threshold():
+    # Порог 3 «из разных категорий»; в комплекте домино — оно НЕ участвует в акции
+    # и не должно приближать порог: участвующих всего 2 → подарка нет.
+    camp = _Camp("gift", gift={"condition": "count", "options": {3: "KWK 0902"}},
+                 slug="korting_gift")
+    camp.exclusions = ["домино"]
+    items = [_oven(40000),
+             ComboItem("Варочная панель домино", 12000, "cooktop", width_mm=288),
+             _hood(15000)]
+    valuer = make_gift_valuer(_lookup)
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is False
+    assert r.manager_review is True
+
+
+def test_gift_excluded_items_do_not_count_toward_sum():
+    # Порог по сумме 50 000: домино (12 000) вне акции — сумма участвующих 47 000.
+    camp = _Camp("gift", gift={"condition": "sum", "options": {50000: "KCM 1005"}},
+                 slug="korting_mbt")
+    camp.exclusions = ["домино"]
+    items = [_oven(35000),
+             ComboItem("Варочная панель домино", 12000, "cooktop", width_mm=288),
+             _hood(12000)]
+    valuer = make_gift_valuer(_lookup)
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is False and r.manager_review is True
+
+
+def test_gift_zeroing_requires_threshold_on_paid_items():
+    # Порог 4; в комплекте РОВНО 4 позиции, одна из них — подарочная модель.
+    # Обнулить её нельзя: оплаченных останется 3 < 4 (эталон Stefany: 4 оплаченных
+    # + ПММ пятой). Честный выход — на подтверждение менеджеру, без обещаний.
+    camp = _Camp("gift", gift={"condition": "count", "options": {4: "MID45"}},
+                 requires_oven=True, slug="midea_pmm")
+    items = [_oven(40000), _cooktop(20000), _hood(15000),
+             ComboItem("Посудомоечная машина Midea MID45S100i", 27990, "dishwasher")]
+    valuer = make_gift_valuer(lambda m: ("Посудомоечная машина Midea MID45S100i", 27990))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is False
+    assert r.manager_review is True
+    assert r.discount_total == 0.0          # никакой «выгоды 27 990» из воздуха
+
+
+def test_gift_zeroing_ok_when_paid_items_meet_threshold():
+    # Контроль: 5 позиций (4 оплаченных + подарочная ПММ) — обнуление законно.
+    camp = _Camp("gift", gift={"condition": "count", "options": {4: "MID45"}},
+                 requires_oven=True, slug="midea_pmm")
+    items = [_oven(40000), _cooktop(20000), _hood(15000),
+             ComboItem("Морозильник", 30000, "freezer"),
+             ComboItem("Посудомоечная машина Midea MID45S100i", 27990, "dishwasher")]
+    valuer = make_gift_valuer(lambda m: ("Посудомоечная машина Midea MID45S100i", 27990))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is True and r.item_discounts == {4: 100.0}
+
+
+def test_gift_ladder_zeroing_uses_lower_tier_of_paid_items():
+    # Лестница Формулы выгоды: обнулили вытяжку (порог 2) — оплаченных 2, и
+    # подарок порога 2 это ровно вытяжка → обнуление законно.
+    ladder = {"condition": "count",
+              "options": {2: "KHI 6393", 3: "OKB 3810", 4: "KDI 45140"}}
+    camp = _Camp("gift", gift=ladder, slug="formula")
+    items = [_oven(40000), _cooktop(25000),
+             ComboItem("Кухонная вытяжка Korting KHI 6393 N", 13120, "hood")]
+
+    def lookup(m):
+        return {"KHI 6393": ("Кухонная вытяжка Korting KHI 6393 N", 13120),
+                "OKB 3810": ("Духовой шкаф Korting OKB 3810 FGN", 40990)}.get(m)
+
+    r = compute_combo(items, camp, gift_value=make_gift_valuer(lookup))
+    # По ВСЕМ позициям порог 3 → духовой; но духовой не в комплекте → он идёт
+    # СВЕРХУ бесплатно (все 3 позиции оплачены — условие выполнено честно).
+    assert r.applied is True
+    assert r.gift_title == "Духовой шкаф Korting OKB 3810 FGN"
+    assert r.final_total == r.subtotal      # подарок сверху, сумма не меняется

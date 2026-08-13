@@ -135,9 +135,10 @@ def _preferred_promo_models(campaigns: list, positions: int = 0) -> list[str]:
 
     `positions` — сколько РАЗНЫХ товарных категорий в запросе клиента. Для
     подарков-лестниц («2 прибора → вытяжка, 3 → духовой, 4 → ПММ» у Korting)
-    выдаётся ровно ОДИН подарок — по максимальному достижимому порогу. Без учёта
-    порога в предпочтение попадали все три модели сразу, и комплект уводило к
-    моделям, которые в этом размере комплекта подарком не станут. Пороги по СУММЕ
+    выдаётся ровно ОДИН подарок — по максимальному достижимому порогу, причём
+    порог обязан выполняться ОПЛАЧЕННЫМИ позициями: подарочная модель займёт
+    одну из позиций и обнулится, значит оплаченных останется positions−1 — по
+    ним и целимся (движок расчёта проверяет то же условие). Пороги по СУММЕ
     покупки заранее не проверить (цены ещё не выбраны) — такие модели оставляем
     все, финальное условие всё равно проверит оцифровщик подарка.
     """
@@ -160,7 +161,7 @@ def _preferred_promo_models(campaigns: list, positions: int = 0) -> list[str]:
             cond = gift.get("condition") if isinstance(gift, dict) else gift.condition
             opts = (gift.get("options") if isinstance(gift, dict) else gift.options) or {}
             if cond == "count":
-                reachable = [t for t in opts if t <= positions]
+                reachable = [t for t in opts if t <= positions - 1]
                 if reachable:
                     _add(opts[max(reachable)])
                 continue
