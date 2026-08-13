@@ -21,7 +21,10 @@ Telegram-бот подбора техники **ekrom.ru**. Клиент пиш�
 - **Деплой:** `git push` → на сервере `git pull --ff-only && bash deploy/update.sh` (pip+restart).
 - **Cron:** 04:00 `scripts/crawl_catalog.py` (каталог, инкрементально) + 04:40
   `scripts/crawl_promos.py` (акции). Ставятся скриптом `deploy/install-cron.sh`.
-- GitHub (приватный): https://github.com/grisha520/ekrom_tg_bot — **последний коммит `308d7ee`**.
+- GitHub (приватный): https://github.com/grisha520/ekrom_tg_bot, рабочая ветка `main`.
+  Актуальное состояние смотрите через `git log --oneline -5`, а НЕ по хешу из этого
+  файла: закреплённый здесь коммит устаревает после каждого пуша и уже вводил в
+  заблуждение (значился `308d7ee`, когда на деле было на 5 коммитов больше).
 - Не в git: `.env`, `storage_state.json`, `managers.json`, `catalog.db*`, `bot_analytics.db`, `data/history/`.
 - ⚠️ root-пароль светился в чате — сменить/SSH-ключи.
 
