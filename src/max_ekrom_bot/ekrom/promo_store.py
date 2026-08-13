@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from datetime import date
 from pathlib import Path
 
 from .promos import GiftRule, PromoCampaign, PromoItem, SpecPriceRule
@@ -148,14 +149,24 @@ class PromoStore:
             )
         return len(campaigns)
 
-    def campaigns_for_brand(self, brand: str) -> list[dict]:
-        """Кампании бренда (строки как dict) — для расчёта комплекта."""
+    def campaigns_for_brand(self, brand: str, today: date | None = None) -> list[dict]:
+        """ДЕЙСТВУЮЩИЕ кампании бренда (строки как dict) — для расчёта комплекта.
+
+        Истёкшие (`period_to` раньше `today`) и ещё не начавшиеся (`period_from`
+        позже `today`) кампании отсекаются: датасет обновляется краулом раз в
+        сутки, и между прогонами акция может закончиться — обещать клиенту
+        скидку по ней нельзя. Кампании без распознанных дат считаем действующими
+        (их срок был актуален на момент краула).
+        """
+        iso_today = (today or date.today()).isoformat()
         with self._conn() as c:
             c.row_factory = sqlite3.Row
             rows = c.execute(
                 "SELECT * FROM promo_campaigns WHERE brand=? COLLATE NOCASE "
+                "AND (period_to IS NULL OR period_to >= ?) "
+                "AND (period_from IS NULL OR period_from <= ?) "
                 "ORDER BY mechanic, slug",
-                (brand,),
+                (brand, iso_today, iso_today),
             ).fetchall()
         out = []
         for r in rows:
@@ -165,8 +176,17 @@ class PromoStore:
             d["gift"] = _gift_from_json(d.get("gift_json"))
             d["spec"] = _spec_from_json(d.get("spec_json"))
             d["exclusions"] = json.loads(d.get("exclusions_json") or "[]")
+            d["listed_urls"] = self._listed_urls(d["slug"]) if d.get("scope") == "listed" else []
             out.append(d)
         return out
+
+    def _listed_urls(self, slug: str) -> list[str]:
+        """URL витринных участников кампании (для проверки scope=listed)."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT url FROM promo_items WHERE slug=?", (slug,)
+            ).fetchall()
+        return [u for (u,) in rows if u]
 
     def brand_counts(self) -> dict[str, int]:
         """Сколько кампаний на каждый бренд (для отчёта датасета)."""

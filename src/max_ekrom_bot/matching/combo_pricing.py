@@ -26,7 +26,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from urllib.parse import urlsplit
 
 
 @dataclass
@@ -63,6 +64,8 @@ class ComboResult:
     note: str = ""                              # пояснение (условие/уточнение менеджера)
     manager_review: bool = False                # True → авто-итогу нельзя доверять как финалу
     campaign_slug: str | None = None            # какая акция дала этот результат
+    campaign_title: str | None = None           # её название (для показа клиенту)
+    campaign_period_to: str | None = None       # ISO-дата окончания акции (или None)
 
 
 # Механики, чей итог автоматически считать нельзя — их размечаем на менеджера.
@@ -104,6 +107,18 @@ def _excluded(item: ComboItem, exclusions: list[str]) -> bool:
     return False
 
 
+def _url_path(url: str | None) -> str:
+    """Путь товара из URL (без домена/хвостового слэша) — для сравнения ссылок.
+
+    Витринные участники акции и товары каталога могут ссылаться на один товар
+    через разные хосты (www / поддомен города) — сравниваем только путь.
+    """
+    try:
+        return (urlsplit(url or "").path or "").rstrip("/").lower()
+    except ValueError:
+        return ""
+
+
 def _tier_for(tiers: dict[int, float], count: int) -> float | None:
     """Процент для комплекта из `count` позиций: наибольший тариф с ключом ≤ count.
 
@@ -132,6 +147,8 @@ def compute_combo(
     base = ComboResult(
         mechanic="none", subtotal=subtotal, discount_total=0.0, final_total=subtotal,
         campaign_slug=slug,
+        campaign_title=_get(campaign, "title", None) if campaign is not None else None,
+        campaign_period_to=_get(campaign, "period_to", None) if campaign is not None else None,
     )
     if campaign is None or not items:
         base.note = "Комплектная скидка не действует — цена по прайсу." if items else ""
@@ -143,9 +160,28 @@ def compute_combo(
     exclusions = list(_get(campaign, "exclusions", []) or [])
     base.mechanic = mechanic
 
-    # Позиции, участвующие в акции (правило «домино/отдельностоящие/… не участвуют»):
-    # только они идут в счёт предметов и в базу скидки — как в эталонных подборках.
-    part = [k for k, it in enumerate(items) if not _excluded(it, exclusions)]
+    # Позиции, участвующие в акции: вне участия — исключения кампании
+    # («домино/отдельностоящие/… не участвуют») и, для акций «только на
+    # перечисленные товары» (scope=listed), модели вне списка участников.
+    # Только участвующие идут в счёт предметов и в базу скидки — как в эталонах.
+    listed_paths: set[str] = set()
+    if _get(campaign, "scope", None) == "listed":
+        listed_paths = {p for p in
+                        (_url_path(u) for u in (_get(campaign, "listed_urls", []) or []))
+                        if p}
+
+    def _participates(it: ComboItem) -> bool:
+        if _excluded(it, exclusions):
+            return False
+        if listed_paths:
+            return _url_path(it.url) in listed_paths
+        return True
+
+    part = [k for k, it in enumerate(items) if _participates(it)]
+    if items and not part and listed_paths:
+        base.note = ("В этой акции участвуют только отдельные модели — "
+                     "позиции комплекта в неё не входят.")
+        return base
 
     # «Доп. предмет по спеццене» (холодильник конкретной модели) — считается по
     # распарсенному правилу; без правила падаем в manager_review ниже.
@@ -170,17 +206,17 @@ def compute_combo(
                 )
                 if gidx is not None:
                     discount = round(items[gidx].price, 2)
-                    return ComboResult(
-                        mechanic=mechanic, subtotal=subtotal, discount_total=discount,
+                    # replace() сохраняет «паспорт» акции (slug/название/срок) —
+                    # его показываем клиенту вместе с выгодой.
+                    return replace(
+                        base, discount_total=discount,
                         final_total=round(subtotal - discount, 2), applied=True,
                         gift_title=items[gidx].title, item_discounts={gidx: 100.0},
-                        campaign_slug=slug,
                         note=f"{items[gidx].title} — в подарок (скидка −100%).",
                     )
-                return ComboResult(
-                    mechanic=mechanic, subtotal=subtotal, discount_total=price,
+                return replace(
+                    base, discount_total=price,
                     final_total=subtotal, applied=True, gift_title=title,
-                    campaign_slug=slug,
                     note=f"В подарок: {title} (стоимость {_fmt(price)}) — бесплатно.",
                 )
         base.manager_review = True
@@ -207,10 +243,10 @@ def compute_combo(
         # Скидка на НАИМЕНЬШИЙ по стоимости УЧАСТВУЮЩИЙ товар.
         idx = min(part, key=lambda k: items[k].price)
         discount = round(items[idx].price * pct / 100, 2)
-        return ComboResult(
-            mechanic=mechanic, subtotal=subtotal, discount_total=discount,
+        return replace(
+            base, discount_total=discount,
             final_total=round(subtotal - discount, 2), applied=True,
-            item_discounts={idx: pct}, campaign_slug=slug,
+            item_discounts={idx: pct},
             note=f"Скидка −{_pct(pct)}% на самый недорогой товар в комплекте{excl_note}.",
         )
 
@@ -218,14 +254,13 @@ def compute_combo(
         # Плоский % на УЧАСТВУЮЩИЕ позиции (эталон: домино в базу не входит).
         pbase = round(sum(items[k].price for k in part), 2)
         discount = round(pbase * pct / 100, 2)
-        return ComboResult(
-            mechanic=mechanic, subtotal=subtotal, discount_total=discount,
+        return replace(
+            base, discount_total=discount,
             final_total=round(subtotal - discount, 2), applied=True,
             combo_discount_pct=pct,
             # На каждой участвующей позиции — её % (как в эталонных PDF менеджера:
             # «Скидка −11%» на каждой строке + общий итог).
             item_discounts={k: pct for k in part},
-            campaign_slug=slug,
             note=f"Скидка −{_pct(pct)}% на комплект из {distinct} позиций{excl_note}.",
         )
 
@@ -295,11 +330,10 @@ def _compute_spec_price(
         base.note = "Спеццена не даёт выгоды против текущей цены холодильника."
         return base
 
-    return ComboResult(
-        mechanic="spec_price", subtotal=base.subtotal, discount_total=discount,
+    return replace(
+        base, mechanic="spec_price", discount_total=discount,
         final_total=round(base.subtotal - discount, 2), applied=True,
         item_discounts={sidx: round(discount / catalog_price * 100, 2)},
-        campaign_slug=base.campaign_slug,
         note=(f"{items[sidx].title} — по спеццене {_fmt(fixed)} "
               f"при комплекте из {distinct} предметов."),
     )

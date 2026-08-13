@@ -361,6 +361,77 @@ def test_promo_store_replace_all_is_idempotent(tmp_path):
     assert store.count() == 1
 
 
+def test_scope_detection_three_way():
+    # «весь ассортимент» → all_brand; явное «участвуют только» → listed;
+    # без формулировки → unspecified (витрина ≠ состав акции, список не навязываем).
+    camp_all = parse_campaign(_campaign_html("", rules=""), "s", BASE,
+                              title_hint="Korting: акция")
+    assert camp_all.scope == "unspecified"
+    html = ('<div class="title title--banner"><h2>Korting: акция</h2></div>'
+            '<div class="action-descr__inner"><p>В акции участвуют только модели '
+            'из списка ниже. Скидка 5% на комплект из 2 единиц; '
+            'Скидка 7% на комплект из 3 единиц.</p></div>')
+    assert parse_campaign(html, "s", BASE).scope == "listed"
+    html_all = ('<div class="title title--banner"><h2>Korting: акция</h2></div>'
+                f'<div class="action-descr__inner"><p>{KORTING_CASCADE}</p></div>')
+    assert parse_campaign(html_all, "s", BASE).scope == "all_brand"
+
+
+def _store_with(tmp_path, **overrides):
+    """PromoStore с одной Korting-кампанией; поля кампании правим через overrides."""
+    html = _campaign_html("", h1='Korting: "Каскадные скидки"', rules=KORTING_CASCADE)
+    camp = parse_campaign(html, "korting_cascade", BASE)
+    for k, v in overrides.items():
+        setattr(camp, k, v)
+    store = PromoStore(tmp_path / "c.db")
+    store.replace_all([camp])
+    return store
+
+
+def test_campaigns_for_brand_skips_expired(tmp_path):
+    from datetime import date
+
+    store = _store_with(tmp_path, period_to="2026-08-31")
+    assert store.campaigns_for_brand("Korting", today=date(2026, 8, 13)) != []
+    # В день окончания акция ещё действует, после — нет.
+    assert store.campaigns_for_brand("Korting", today=date(2026, 8, 31)) != []
+    assert store.campaigns_for_brand("Korting", today=date(2026, 9, 1)) == []
+
+
+def test_campaigns_for_brand_skips_not_started(tmp_path):
+    from datetime import date
+
+    store = _store_with(tmp_path, period_from="2026-09-01", period_to=None)
+    assert store.campaigns_for_brand("Korting", today=date(2026, 8, 13)) == []
+    assert store.campaigns_for_brand("Korting", today=date(2026, 9, 1)) != []
+
+
+def test_campaigns_for_brand_keeps_undated(tmp_path):
+    # Кампании без распознанных дат считаем действующими (срок был жив при крауле).
+    store = _store_with(tmp_path, period_from=None, period_to=None)
+    assert store.campaigns_for_brand("Korting") != []
+
+
+def test_campaigns_for_brand_listed_urls(tmp_path):
+    # Для scope=listed отдаём ссылки витринных участников (проверка списка в движке);
+    # для остальных охватов список пуст (не навязываем витрину как состав акции).
+    cards = _CARD.format(pid="1", href="/products/a/", title="Korting A",
+                         price="10 000 ₽", old="")
+    html = _campaign_html(cards, h1='Korting: "Каскадные скидки"', rules=KORTING_CASCADE)
+    camp = parse_campaign(html, "korting_cascade", BASE)
+
+    camp.scope = "listed"
+    store = PromoStore(tmp_path / "a.db")
+    store.replace_all([camp])
+    row = store.campaigns_for_brand("Korting")[0]
+    assert row["listed_urls"] == [f"{BASE}/products/a/"]
+
+    camp.scope = "all_brand"
+    store2 = PromoStore(tmp_path / "b.db")
+    store2.replace_all([camp])
+    assert store2.campaigns_for_brand("Korting")[0]["listed_urls"] == []
+
+
 def test_promo_store_migrates_missing_gift_column(tmp_path):
     # БД прошлой версии без gift_json — PromoStore должен добить столбец на месте.
     import sqlite3
@@ -377,3 +448,80 @@ def test_promo_store_migrates_missing_gift_column(tmp_path):
     store = PromoStore(db)  # миграция при инициализации
     store.replace_all([camp])
     assert store.campaigns_for_brand("Korting")[0]["gift"]["condition"] == "sum"
+
+
+# Реальный текст правил «Korting: Формула выгоды» (снят с сайта 13.08.2026) —
+# новая подарочная механика-«лестница»: модель подарка стоит ПОСЛЕ «в подарок»,
+# порогов несколько, даты периода с пробелами внутри.
+KORTING_FORMULA = (
+    "Формула выгоды 1. Период проведения акции: 1.08. 2026 – 30. 09. 2026. "
+    "2. В акции участвует весь ассортимент крупной бытовой техники бренда KÖRTING "
+    "(отдельностоящая и встраиваемая). В акции не участвуют: отдельностоящая "
+    "микроволновая печь, двухконфорочные варочные панели и малая бытовая техника. "
+    "3. Подарки за покупку комплекта техники KÖRTING: a. при покупке 2 приборов – "
+    "в подарок предоставляется полновстраиваемая вытяжка KHI 6393 N; b. при покупке "
+    "3 приборов – в подарок предоставляется электрический духовой шкаф OKB 3810 FGN; "
+    "c. при покупке 4 приборов – в подарок предоставляется посудомоечная машина "
+    "KDI 45140 или KDI 60110. 4. Все приборы в комплекте должны быть из разных "
+    "товарных категорий актуального ассортимента KÖRTING."
+)
+
+
+def test_parse_gift_ladder_model_after_gift_word():
+    g = parse_gift(KORTING_FORMULA)
+    assert g is not None and g.condition == "count"
+    assert g.options == {2: "KHI 6393", 3: "OKB 3810", 4: "KDI 45140"}
+
+
+def test_parse_period_with_spaces_inside_dates():
+    assert parse_period("Период проведения акции: 1.08. 2026 – 30. 09. 2026.") == \
+        ("2026-08-01", "2026-09-30")
+
+
+def test_parse_exclusions_formula_vygody():
+    # «двухконфорочные» → домино; «отдельностоящая микроволновая» → соло-СВЧ,
+    # НЕ бланкетное «отдельностоящая» (в акции участвует отдельностоящая техника);
+    # «малая бытовая техника» (именительный падеж) → мбт.
+    exc = parse_exclusions(KORTING_FORMULA)
+    assert "домино" in exc
+    assert "соло-свч" in exc
+    assert "мбт" in exc
+    assert "отдельностоящая" not in exc
+
+
+def test_parse_campaign_formula_vygody_end_to_end():
+    html = ('<div class="title title--banner"><h2>Korting: Формула выгоды</h2></div>'
+            f'<div class="action-descr__inner"><p>{KORTING_FORMULA}</p></div>')
+    camp = parse_campaign(html, "korting_formula_vygody", BASE)
+    assert camp.brand == "Korting"
+    assert camp.mechanic == PromoMechanic.GIFT
+    assert camp.scope == "all_brand"
+    assert camp.period_from == "2026-08-01" and camp.period_to == "2026-09-30"
+    assert camp.gift and camp.gift.options[4] == "KDI 45140"
+
+
+def test_parse_period_open_ended_is_start_not_end():
+    # «с <дата> - до уведомления» — это ДАТА НАЧАЛА с открытым концом. Слово «до»
+    # относится к «уведомлению»: раньше такую акцию Midea считали истёкшей.
+    assert parse_period("Срок действия акции: с 01.01.2026 - до уведомления") == \
+        ("2026-01-01", None)
+    assert parse_period("Срок проведения акции: с 01.04.2026 - до уведомления") == \
+        ("2026-04-01", None)
+
+
+def test_parse_period_prepositions():
+    assert parse_period("Период: с 01.07.2026 по 30.09.2026") == ("2026-07-01", "2026-09-30")
+    # Начало без предлога, конец с «по» (реальная запись Kuppersberg).
+    assert parse_period("Период проведения: 14 .01.2026 по 30.09.2026.") == \
+        ("2026-01-14", "2026-09-30")
+
+
+def test_parse_campaign_prefers_tile_period_over_rules():
+    # Сайт продлил акцию (плитка «до 31.08.2026»), а в тексте правил остался
+    # старый срок 05.08.2026 — верим плитке, иначе живая акция «истечёт».
+    rules = "Срок проведения акции: 07.05.26 – 05.08.2026 Механика акции: подарок."
+    html = ('<div class="title title--banner"><h2>Maunfeld: подарок за новинку!</h2></div>'
+            f'<div class="action-descr__inner"><p>{rules}</p></div>')
+    camp = parse_campaign(html, "maunfeld_podarok_za_novinku", BASE,
+                          period_hint="до 31.08.2026")
+    assert camp.period_to == "2026-08-31"

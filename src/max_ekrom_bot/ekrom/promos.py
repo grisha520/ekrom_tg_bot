@@ -111,7 +111,7 @@ class PromoCampaign:
     mechanic: str
     period_from: str | None = None       # ISO-дата начала, если распознали
     period_to: str | None = None         # ISO-дата конца
-    scope: str = "listed"                # all_brand | listed
+    scope: str = "unspecified"           # all_brand | listed | unspecified
     rules_text: str = ""
     tiers: dict[int, float] = field(default_factory=dict)  # кол-во позиций → % скидки
     requires_oven: bool = False          # правило «в комплекте обязателен духовой шкаф»
@@ -148,28 +148,63 @@ def brand_from_text(text: str | None) -> str | None:
     return None
 
 
+# Дата с возможными пробелами внутри: «30. 09. 2026», «14 .01.2026» — так пишут в
+# правилах на сайте.
+_RE_DATE = re.compile(r"(\d{1,2})\s?[.\-]\s?(\d{1,2})\s?[.\-]\s?(\d{2,4})")
+# Предлог НЕПОСРЕДСТВЕННО перед датой задаёт её роль.
+_RE_FROM_PREP = re.compile(r"(?:^|[\s(])(?:с|от|начиная\s+с)\s*$")
+_RE_TO_PREP = re.compile(r"(?:^|[\s(])(?:до|по)\s*$")
+
+
+def _iso_date(m: re.Match) -> str | None:
+    """Совпадение даты → ISO-строка (двузначный год = 20xx) или None, если её нет."""
+    d, mo, y = m.groups()
+    yr = int(y)
+    if yr < 100:
+        yr += 2000
+    try:
+        return date(yr, int(mo), int(d)).isoformat()
+    except ValueError:
+        return None
+
+
 def parse_period(rules: str) -> tuple[str | None, str | None]:
     """Достать даты начала/конца из текста правил → ISO (YYYY-MM-DD) или None.
 
-    Форматы на сайте пёстрые: «01.06.26 - 31.07.26», «с 01.01.2026 - до уведомления»,
-    «до 30.09.2026». Берём до двух дат по порядку; одиночную «до <дата>» считаем концом.
+    Роль даты определяет предлог ПЕРЕД НЕЙ, а не наличие слова где-то в тексте:
+    «с 01.01.2026 - до уведомления» — это дата НАЧАЛА с открытым концом, но слово
+    «до» здесь относится к «уведомлению». Раньше такую дату записывали в конец, и
+    живые акции Midea выглядели истёкшими. Без предлогов работает позиционное
+    правило диапазона: «01.06.26 – 31.07.26» → начало, конец.
     """
-    dates = re.findall(r"(\d{1,2})[.\-](\d{1,2})[.\-](\d{2,4})", rules or "")
-    iso: list[str] = []
-    for d, m, y in dates:
-        yr = int(y)
-        if yr < 100:
-            yr += 2000
-        try:
-            iso.append(date(yr, int(m), int(d)).isoformat())
-        except ValueError:
+    text = _RE_WS.sub(" ", rules or "")
+    marked: list[tuple[str, str | None]] = []
+    for m in _RE_DATE.finditer(text):
+        iso = _iso_date(m)
+        if iso is None:
             continue
-    if not iso:
+        before = text[max(0, m.start() - 14):m.start()].lower()
+        if _RE_FROM_PREP.search(before):
+            role = "from"
+        elif _RE_TO_PREP.search(before):
+            role = "to"
+        else:
+            role = None
+        marked.append((iso, role))
+    if not marked:
         return None, None
-    if len(iso) == 1:
-        # одиночная дата: «до <дата>» → это конец, иначе — начало
-        return (None, iso[0]) if re.search(r"\bдо\b", (rules or "").lower()) else (iso[0], None)
-    return iso[0], iso[1]
+
+    pfrom = next((d for d, r in marked if r == "from"), None)
+    pto = next((d for d, r in marked if r == "to"), None)
+    free = [d for d, r in marked if r is None]
+    if pfrom is None and pto is None:
+        # Диапазон без предлогов: первая дата — начало, вторая — конец.
+        return (free[0], free[1]) if len(free) >= 2 else (free[0], None)
+    if pfrom is None and free:
+        pfrom = next((d for d in free if d <= pto), None) if pto else free[0]
+    elif pto is None and free:
+        pto = next((d for d in free if d >= pfrom), None)
+    return pfrom, pto
 
 
 _WORD_N = {"двух": 2, "трех": 3, "трёх": 3, "четырех": 4, "четырёх": 4,
@@ -226,9 +261,12 @@ _MODEL = r"[A-Z]{2,}\d*[A-Z0-9]*(?:\s\d+)?"
 def parse_gift(rules: str) -> "GiftRule | None":
     """Оцифровать условие подарка из текста правил (или None — оставить менеджеру).
 
-    Распознаём два чётких шаблона:
+    Распознаём три чётких шаблона:
       • по сумме: «при покупке … на сумму <N> руб … в подарок <МОДЕЛЬ>»;
-      • по числу позиций: «<МОДЕЛЬ> … в подарок … при покупке <N> приборов».
+      • по числу позиций: «<МОДЕЛЬ> … в подарок … при покупке <N> приборов»;
+      • лестница подарков: «при покупке <N> приборов – в подарок … <МОДЕЛЬ>;
+        при покупке <N+1> приборов – …» (Korting «Формула выгоды»: 2 → вытяжка,
+        3 → духовой шкаф, 4 → ПММ; из «<A> или <B>» берём первую модель).
     «На выбор»/«или спец-цена»/баннерные без текста НЕ оцифровываем (слишком
     вариативно → правило заказчика «не считать неверно»).
     """
@@ -247,6 +285,20 @@ def parse_gift(rules: str) -> "GiftRule | None":
             sum_opts[thr] = model
     if sum_opts:
         return GiftRule("sum", sum_opts)
+
+    # Лестница «при покупке N приборов – в подарок … МОДЕЛЬ» (модель ПОСЛЕ
+    # «в подарок», порогов может быть несколько; сегменты разделены ;/.).
+    ladder: dict[int, str] = {}
+    for m in re.finditer(
+        r"при покупке\s*(\d)(?:-[а-яё]{1,3})?\s*" + _UNIT
+        + r"[а-яё]*[^.;]{0,60}?в подарок[^.;]{0,150}?(" + _MODEL + r")",
+        rules, re.S,
+    ):
+        n = int(m.group(1))
+        if 2 <= n <= 7:
+            ladder.setdefault(n, _RE_WS.sub(" ", m.group(2)).strip())
+    if ladder:
+        return GiftRule("count", ladder)
 
     # По числу позиций: модель перед «в подарок», порог — «при покупке N».
     m = re.search(r"(" + _MODEL + r")[^.]{0,80}?в подарок[^.]{0,80}?при покупке\s*(\d)", rules, re.S)
@@ -295,31 +347,41 @@ def parse_spec_price(rules: str) -> "SpecPriceRule | None":
 
 
 # Формулировки «не участвуют» → канонический ключ исключения (для движка расчёта).
+# «двухконфорочные варочные» = домино («Формула выгоды» Korting); «отдельностоящая
+# микроволновая печь» — это соло-СВЧ, а НЕ бланкетное исключение отдельностоящей
+# техники (негативный lookahead), иначе кампания «участвует отдельностоящая и
+# встраиваемая» теряла бы отдельностоящие приборы.
 _EXCLUSION_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"домино", "домино"),
-    (r"отдельностоящ", "отдельностоящая"),
-    (r"соло\s*свч", "соло-свч"),
+    (r"домино|двухконфороч", "домино"),
+    (r"отдельностоящ\w*\b(?!\s+(?:микроволнов|свч))", "отдельностоящая"),
+    (r"соло\s*свч|отдельностоящ\w*\s+(?:микроволнов|свч)", "соло-свч"),
     (r"измельчител", "измельчитель"),
     (r"соло\s*кофемашин", "соло-кофемашина"),
-    (r"(?:мелкой|малой)\s+бытовой|мбт\s+не\s+участ", "мбт"),
+    (r"(?:мелк|мал)\w*\s+бытов\w*|\bмбт\b", "мбт"),
 )
+
+# Маркер запрещающей формулировки и граница предложения (точка/точка с запятой
+# перед пробелом) — исключения ищем в границах ОДНОГО предложения.
+_RE_EXCL_MARKER = re.compile(r"не\s+участв|кроме|исключ")
+_RE_SENTENCE = re.compile(r"[.;]\s")
 
 
 def parse_exclusions(rules: str) -> list[str]:
     """Категории, НЕ участвующие в акции (влияют на счёт позиций и базу скидки).
 
-    Ловим только явные формулировки «не участвуют / кроме …» рядом с известными
-    словами — иначе упоминание категории в списке участников дало бы ложное исключение.
+    Ловим только явные формулировки «не участвуют / кроме …», причём в границах
+    ОДНОГО предложения: соседняя фраза со своим смыслом не должна попадать под
+    запрет. Реальный кейс «Формулы выгоды» Korting — «участвует весь ассортимент
+    (отдельностоящая и встраиваемая). В акции не участвуют: отдельностоящая
+    микроволновая печь…»: по окну ±90 символов первая фраза ложно читалась как
+    исключение всей отдельностоящей техники.
     """
     low = _RE_WS.sub(" ", (rules or "").lower())
+    banned = [s for s in _RE_SENTENCE.split(low) if _RE_EXCL_MARKER.search(s)]
     out: list[str] = []
     for pat, key in _EXCLUSION_PATTERNS:
-        for m in re.finditer(pat, low):
-            ctx = low[max(0, m.start() - 90):m.end() + 90]
-            if re.search(r"не\s+участв|кроме|исключ", ctx):
-                if key not in out:
-                    out.append(key)
-                break
+        if any(re.search(pat, seg) for seg in banned):
+            out.append(key)
     return out
 
 
@@ -428,11 +490,26 @@ def parse_campaign(
     # «скидка N%», из-за чего классификатор уводит кампанию в gift/flat_combo.
     spec = parse_spec_price(rules)
     mechanic = PromoMechanic.SPEC_PRICE if spec else classify_mechanic(title, rules)
-    pfrom, pto = parse_period(rules)
-    if not (pfrom or pto) and period_hint:
-        pfrom, pto = parse_period(period_hint)
+    # Срок берём ПРЕЖДЕ ВСЕГО с плитки раздела: там сайт показывает собственные
+    # поля активности кампании, а проза правил бывает устаревшей — у «подарка за
+    # новинку» Maunfeld в тексте стоит 05.08.2026, хотя сайт продлил акцию до
+    # 31.08.2026 и продолжает её показывать. Текст правил — запасной источник.
+    pfrom, pto = parse_period(period_hint or "")
+    if not (pfrom or pto):
+        pfrom, pto = parse_period(rules)
     low_rules = rules.lower()
-    scope = "all_brand" if re.search(r"вес[ья]\s+ассортимент", low_rules) else "listed"
+    # Охват акции: «весь ассортимент» → all_brand; ЯВНОЕ «участвуют только …» →
+    # listed (скидка лишь на перечисленные модели — движок сверит позиции со
+    # списком участников). Без явной формулировки — unspecified: витрина на
+    # странице кампании ограничена 21 карточкой и НЕ равна составу акции,
+    # поэтому по умолчанию список не навязываем (эталоны менеджера это
+    # подтверждают: скидка применялась к товарам вне витрины).
+    if re.search(r"вес[ья]\s+ассортимент", low_rules):
+        scope = "all_brand"
+    elif re.search(r"участву\w+\s+только|только\s+(?:на\s+)?(?:модел|выделенн)", low_rules):
+        scope = "listed"
+    else:
+        scope = "unspecified"
     items = parse_campaign_items(html_text, base_url)
     return PromoCampaign(
         slug=slug,

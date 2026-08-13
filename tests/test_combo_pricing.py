@@ -10,12 +10,17 @@ from max_ekrom_bot.matching.combo_pricing import (
 class _Camp:
     """Лёгкая заглушка кампании (как PromoCampaign / строка PromoStore)."""
 
-    def __init__(self, mechanic, tiers=None, requires_oven=False, slug=None, gift=None):
+    def __init__(self, mechanic, tiers=None, requires_oven=False, slug=None, gift=None,
+                 scope=None, listed_urls=None):
         self.mechanic = mechanic
         self.tiers = tiers or {}
         self.requires_oven = requires_oven
         self.slug = slug or mechanic
         self.gift = gift  # {"condition": "sum"|"count", "options": {порог: модель}}
+        if scope is not None:
+            self.scope = scope
+        if listed_urls is not None:
+            self.listed_urls = listed_urls
 
 
 def _oven(price):
@@ -419,3 +424,48 @@ def test_spec_price_requires_oven():
              _fridge(97281)]
     r = compute_combo(items, KUP_SPEC)
     assert r.applied is False and "духов" in r.note.lower()
+
+
+def test_listed_scope_excludes_unlisted_from_base():
+    # Акция «только на перечисленные модели»: позиция вне списка не участвует
+    # ни в счёте предметов, ни в базе скидки (сравнение ссылок — по пути).
+    camp = _Camp("flat_combo", {2: 5, 3: 7}, slug="listed_flat", scope="listed",
+                 listed_urls=["https://www.ekrom.ru/products/oven-a/",
+                              "https://www.ekrom.ru/products/cooktop-b/"])
+    items = [
+        ComboItem("Духовой шкаф A", 30000, "oven", is_oven=True,
+                  url="https://ekrom.ru/products/oven-a"),      # без www и слэша
+        ComboItem("Варочная B", 20000, "cooktop",
+                  url="https://www.ekrom.ru/products/cooktop-b/"),
+        ComboItem("Вытяжка C", 10000, "hood",
+                  url="https://www.ekrom.ru/products/hood-c/"),  # вне списка
+    ]
+    r = compute_combo(items, camp)
+    assert r.applied is True
+    assert r.combo_discount_pct == 5              # 2 участвующих, а не 3
+    assert r.discount_total == 2500.0             # 5% от 50000 (без вытяжки)
+    assert r.item_discounts == {0: 5, 1: 5}
+
+
+def test_listed_scope_no_participants_not_applied():
+    camp = _Camp("flat_combo", {2: 5}, slug="listed_flat", scope="listed",
+                 listed_urls=["https://www.ekrom.ru/products/other/"])
+    items = [ComboItem("Духовой шкаф", 30000, "oven", is_oven=True,
+                       url="https://www.ekrom.ru/products/oven-a/"),
+             ComboItem("Варочная", 20000, "cooktop",
+                       url="https://www.ekrom.ru/products/cooktop-b/")]
+    r = compute_combo(items, camp)
+    assert r.applied is False
+    assert "отдельные модели" in r.note
+
+
+def test_unspecified_scope_ignores_listed_urls():
+    # Охват не распознан (витрина ≠ состав акции) — список участников не навязываем.
+    camp = _Camp("flat_combo", {2: 5}, slug="flat", scope="unspecified",
+                 listed_urls=["https://www.ekrom.ru/products/other/"])
+    items = [ComboItem("Духовой шкаф", 30000, "oven", is_oven=True,
+                       url="https://www.ekrom.ru/products/oven-a/"),
+             ComboItem("Варочная", 20000, "cooktop",
+                       url="https://www.ekrom.ru/products/cooktop-b/")]
+    r = compute_combo(items, camp)
+    assert r.applied is True and r.combo_discount_pct == 5
