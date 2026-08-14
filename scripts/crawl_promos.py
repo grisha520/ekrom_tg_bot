@@ -18,6 +18,7 @@ from max_ekrom_bot.ekrom.promos import crawl_promos
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # строка на каждый запрос — шум
     settings = get_settings()
     campaigns = asyncio.run(crawl_promos(settings, target_brands_only=True))
 

@@ -26,6 +26,9 @@ def main() -> None:
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # httpx пишет строку на КАЖДЫЙ запрос: с проверкой фото это ~5 000 строк за
+    # ночь, а ротации у логов нет. Оставляем только предупреждения и ошибки.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     results = asyncio.run(crawl(
         refresh_images=not args.no_images, image_limit=args.image_limit,
     ))
