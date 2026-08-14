@@ -483,3 +483,33 @@ def test_effective_total_accounts_for_gift_on_top():
     kit2 = BrandKit(brand="K", selection=SelectionResult(items=[]), combo=discounted,
                     requested=2, coverage=2, design_consistent=True)
     assert kit2.effective_total == 90000
+
+
+def test_colorless_candidate_still_closes_position():
+    """Живой провал: варочная выпадала у ВСЕХ пяти брендов при подходящих кандидатах.
+
+    Сборка идёт по цветовой группе, а у карточек живого обхода атрибута «Цвет»
+    нет и по названию он не читается («HI 64013 B» — односимвольный код мы не
+    трактуем). Раньше такие товары отбрасывались, и позиция оставалась пустой.
+    """
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000, color="чёрный")],
+        [CatalogProduct(title="Индукционная варочная панель Korting HI 64013 B",
+                        url="u/cook", price=28490)],       # цвет не распознаётся
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert kit.coverage == 2, "позиция без распознанного цвета не должна выпадать"
+    assert "HI 64013" in kit.selection.matched[1].product.title
+
+
+def test_group_color_still_preferred_over_colorless():
+    # Контроль: если есть товар нужной гаммы — он идёт вперёд «молчащего».
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000, color="чёрный")],
+        [CatalogProduct(title="Варочная панель Korting БЕЗ ЦВЕТА", url="u/x", price=10000),
+         _p("Korting", "Варочная панель", 26000, color="чёрный")],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert "чёрный" in kit.selection.matched[1].product.title.lower()

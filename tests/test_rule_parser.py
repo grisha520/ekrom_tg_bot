@@ -128,3 +128,14 @@ def test_no_width_no_change():
     spec = _spec_w("духовой шкаф", None)
     drop_phantom_width(spec)
     assert spec.width_mm is None
+
+
+def test_width_recognised_without_space_before_unit():
+    # «(500мм)» без пробела: \b между цифрой и кириллицей не срабатывает, и
+    # законная ширина терялась — вытяжка на 500 подбиралась как попало.
+    from max_ekrom_bot.parsing.parser import drop_phantom_width
+
+    for raw in ("вытяжку (500мм)", "вытяжка 500мм", "вытяжка 50см", "вытяжка 50 см"):
+        spec = _spec_w(raw, 500)
+        drop_phantom_width(spec)
+        assert spec.width_mm == 500, raw
