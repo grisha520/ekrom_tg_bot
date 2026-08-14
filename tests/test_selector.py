@@ -381,3 +381,64 @@ def test_combi_oven_by_title_and_attr():
     assert _is_combi_microwave_oven(CatalogProduct(title="Духовой X", url="b",
                                     attributes={"Функция СВЧ": "Да"}))
     assert not _is_combi_microwave_oven(CatalogProduct(title="Духовой шкаф Korting OKB", url="c"))
+
+
+# ── Порядок смягчений: тип техники важнее габарита ────────────────────────────
+
+def test_named_type_beats_width_when_nothing_fits_exactly():
+    """Живой провал: «вытяжка полновстр. 450» → островная за 92 990 ₽.
+
+    У бренда нет полновстраиваемой ровно на 450: есть островная 450 и
+    полновстраиваемая 495. Клиент назвал ТИП — гнуться должен габарит.
+    """
+    from max_ekrom_bot.models import AttrConstraint
+
+    spec = ProductSpec(
+        appliance=ApplianceType.HOOD, raw_text="вытяжка полновстр. 450", width_mm=450,
+        attr_constraints=[AttrConstraint(attribute="Тип кухонной вытяжки", op="eq",
+                                         value="Полновстраиваемая")],
+    )
+    island = CatalogProduct(
+        title="Кухонная вытяжка Korting KHA 45970 W CUBE", url="u1", price=92990,
+        attributes={"Тип кухонной вытяжки": "Островная", "Ширина, мм": "450"},
+    )
+    built_in = CatalogProduct(
+        title="Кухонная вытяжка Korting KHI 6631 RN", url="u2", price=13690,
+        attributes={"Тип кухонной вытяжки": "Полновстраиваемая", "Ширина, мм": "495"},
+    )
+    ranked = ProductSelector().ranked_candidates(spec, [island, built_in])
+    assert ranked, "выдача не должна быть пустой"
+    assert "KHI 6631" in ranked[0].title, "взяли островную вместо полновстраиваемой"
+
+
+def test_exact_match_still_wins_when_it_exists():
+    # Контроль: если есть полновстраиваемая нужной ширины — берём именно её.
+    from max_ekrom_bot.models import AttrConstraint
+
+    spec = ProductSpec(
+        appliance=ApplianceType.HOOD, raw_text="вытяжка полновстраиваемая 450", width_mm=450,
+        attr_constraints=[AttrConstraint(attribute="Тип кухонной вытяжки", op="eq",
+                                         value="Полновстраиваемая")],
+    )
+    exact = CatalogProduct(
+        title="Вытяжка BAY 45", url="u1", price=7901,
+        attributes={"Тип кухонной вытяжки": "Полновстраиваемая", "Ширина, мм": "450"},
+    )
+    wider = CatalogProduct(
+        title="Вытяжка KHI 6631", url="u2", price=13690,
+        attributes={"Тип кухонной вытяжки": "Полновстраиваемая", "Ширина, мм": "495"},
+    )
+    ranked = ProductSelector().ranked_candidates(spec, [wider, exact])
+    assert "BAY 45" in ranked[0].title
+
+
+def test_width_still_filters_when_type_not_requested():
+    # Без названного типа ширина остаётся жёстким фильтром (ПММ 45 ≠ 60).
+    spec = ProductSpec(appliance=ApplianceType.DISHWASHER,
+                       raw_text="посудомойка 450", width_mm=450)
+    narrow = CatalogProduct(title="ПММ 45", url="u1", price=30000,
+                            attributes={"Ширина, мм": "450"})
+    wide = CatalogProduct(title="ПММ 60", url="u2", price=25000,
+                          attributes={"Ширина, мм": "600"})
+    ranked = ProductSelector().ranked_candidates(spec, [wide, narrow])
+    assert ranked[0].title == "ПММ 45"       # дешевле, но шире — не берём

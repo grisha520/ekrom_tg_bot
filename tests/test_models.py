@@ -79,3 +79,23 @@ def test_segment_null_string_coerced_to_none():
     assert req.segment is None
     assert req.notes is None
     assert CustomerRequest.model_validate({"specs": [], "segment": "премиум"}).segment == "премиум"
+
+
+def test_attr_constraints_accept_objects_not_only_dicts():
+    # Раньше валидатор пропускал ТОЛЬКО словари, и готовые AttrConstraint молча
+    # исчезали — код, строящий спеки программно, терял ограничения без ошибки.
+    from max_ekrom_bot.models import AttrConstraint, ApplianceType, ProductSpec
+
+    spec = ProductSpec(
+        appliance=ApplianceType.HOOD, raw_text="вытяжка",
+        attr_constraints=[AttrConstraint(attribute="Тип кухонной вытяжки", op="eq",
+                                         value="Полновстраиваемая")],
+    )
+    assert len(spec.attr_constraints) == 1
+    assert spec.attr_constraints[0].attribute == "Тип кухонной вытяжки"
+
+    # Мусор без имени/значения по-прежнему отсеивается.
+    spec2 = ProductSpec(appliance=ApplianceType.HOOD, raw_text="в",
+                        attr_constraints=[{"attribute": "", "value": "x"},
+                                          {"attribute": "Ширина, мм", "value": ""}])
+    assert spec2.attr_constraints == []

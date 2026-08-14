@@ -70,3 +70,61 @@ def test_not_negation_only_excludes_color():
 def test_unknown_lines_are_dropped():
     req = RuleBasedParser().parse("Здравствуйте! Хочу что-нибудь для кухни.")
     assert req.specs == []
+
+
+# ── Страховка от придуманной ширины (drop_phantom_width) ─────────────────────
+
+def _spec_w(raw: str, width: int | None, **kw):
+    from max_ekrom_bot.models import ApplianceType, ProductSpec
+
+    return ProductSpec(appliance=kw.pop("appliance", ApplianceType.COOKTOP),
+                       raw_text=raw, width_mm=width, **kw)
+
+
+def test_burner_count_is_not_width():
+    # Живой провал: «варка 4х электрика» → ширина 450, и позиция выпала совсем
+    # (45-см электрических варочных на 4 конфорки у бренда нет).
+    from max_ekrom_bot.parsing.parser import drop_phantom_width
+
+    spec = _spec_w("варка 4х электрика с зоной расширения", 450, burners=4)
+    drop_phantom_width(spec)
+    assert spec.width_mm is None
+    assert spec.burners == 4          # конфорки остаются
+
+
+def test_explicit_width_is_kept():
+    from max_ekrom_bot.parsing.parser import drop_phantom_width
+
+    for raw, w in (("вытяжка полновстр. 450", 450), ("посудомоечная машина 45 см", 450),
+                   ("духовка 450, белая", 450), ("варочная на 60 см", 600)):
+        spec = _spec_w(raw, w)
+        drop_phantom_width(spec)
+        assert spec.width_mm == w, raw
+
+
+def test_depth_is_not_width():
+    # «глубина 31 см» у встраиваемой СВЧ — это глубина, а не ширина.
+    from max_ekrom_bot.models import ApplianceType
+    from max_ekrom_bot.parsing.parser import drop_phantom_width
+
+    spec = _spec_w("микроволновка встроенная, глубина 31 см, цвет черный", 310,
+                   appliance=ApplianceType.MICROWAVE)
+    drop_phantom_width(spec)
+    assert spec.width_mm is None
+    assert spec.extra.get("глубина") == "310"
+
+
+def test_item_count_is_not_width():
+    from max_ekrom_bot.parsing.parser import drop_phantom_width
+
+    spec = _spec_w("комплект из 3 приборов", 300)
+    drop_phantom_width(spec)
+    assert spec.width_mm is None
+
+
+def test_no_width_no_change():
+    from max_ekrom_bot.parsing.parser import drop_phantom_width
+
+    spec = _spec_w("духовой шкаф", None)
+    drop_phantom_width(spec)
+    assert spec.width_mm is None

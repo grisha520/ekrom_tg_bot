@@ -423,3 +423,63 @@ def test_rivals_recorded_for_explanation():
     assert best.brand == "Korting"
     assert [r.brand for r in best.rivals] == ["Midea"]
     assert best.rivals[0].coverage == 2          # Midea закрыла лишь 2 из 3
+
+
+def test_brand_choice_prefers_cheaper_kit_over_bigger_gift():
+    # Живой провал (сообщение «духовка 450, варка, вытяжка полновстр., ПММ»):
+    # Korting выигрывал подарком на 42 490 ₽, хотя его комплект стоил 222 460 ₽
+    # против 88 133 ₽ у Maunfeld. Клиент переплачивал 134 тысячи за подарок на 42.
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 150000), _p("Maunfeld", "Духовой шкаф", 60000)],
+        [_p("Korting", "Варочная панель", 72000), _p("Maunfeld", "Варочная панель", 28000)],
+    ]
+    gift_camp = {"mechanic": "gift", "requires_oven": False, "slug": "formula",
+                 "gift": {"condition": "count", "options": {2: "GIFT"}}}
+    camp = {"Korting": [gift_camp], "Maunfeld": [FLAT]}.get
+
+    def gift_42k(campaign, items):
+        return ("ПММ в подарок", 42490)
+
+    best = choose_best_kit(specs, cands, camp, brands=("Korting", "Maunfeld"),
+                           gift_value=gift_42k)
+    assert best.brand == "Maunfeld"
+    # 88 000 − 5% = 83 600 против Korting 222 000 − подарок 42 490 = 179 510.
+    assert best.combo.final_total < 100000
+
+
+def test_gift_still_wins_when_prices_equal():
+    # Обратная сторона: при равной цене подарок обязан побеждать — вычитаем его
+    # стоимость из того, что клиент фактически отдаёт.
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000), _p("Midea", "Духовой шкаф", 40000)],
+        [_p("Korting", "Варочная панель", 20000), _p("Midea", "Варочная панель", 20000)],
+    ]
+    gift_camp = {"mechanic": "gift", "requires_oven": False, "slug": "g",
+                 "gift": {"condition": "sum", "options": {50000: "X"}}}
+    camp = {"Korting": [CASCADE], "Midea": [gift_camp]}.get
+
+    best = choose_best_kit(specs, cands, camp, brands=("Korting", "Midea"),
+                           gift_value=lambda c, i: ("СВЧ в подарок", 9000))
+    # Korting: 60 000 − 5 000 = 55 000. Midea: 60 000 − подарок 9 000 = 51 000.
+    assert best.brand == "Midea"
+
+
+def test_effective_total_accounts_for_gift_on_top():
+    from max_ekrom_bot.matching.combo_pricing import ComboResult
+    from max_ekrom_bot.matching.kit_builder import BrandKit
+    from max_ekrom_bot.models import SelectionResult
+
+    on_top = ComboResult(mechanic="gift", subtotal=100000, discount_total=30000,
+                         final_total=100000, applied=True, gift_title="ПММ")
+    kit = BrandKit(brand="K", selection=SelectionResult(items=[]), combo=on_top,
+                   requested=2, coverage=2, design_consistent=True)
+    assert kit.effective_total == 70000        # подарок сверху вычитается
+
+    # Скидка уже сидит в итоге — второй раз не вычитаем.
+    discounted = ComboResult(mechanic="flat_combo", subtotal=100000,
+                             discount_total=10000, final_total=90000, applied=True)
+    kit2 = BrandKit(brand="K", selection=SelectionResult(items=[]), combo=discounted,
+                    requested=2, coverage=2, design_consistent=True)
+    assert kit2.effective_total == 90000

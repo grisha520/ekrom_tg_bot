@@ -488,28 +488,32 @@ class ProductSelector:
     def ranked_candidates(
         self, spec: ProductSpec, candidates: list[CatalogProduct]
     ) -> list[CatalogProduct]:
-        """Кандидаты, прошедшие фильтры, отсортированные по взвешенному скорингу."""
-        filtered = [c for c in candidates if self._passes_filters(spec, c)]
-        priced = [c for c in filtered if c.price is not None]
-        # Смягчение: если ограничения по характеристикам обнулили выдачу — пробуем
-        # без них (базовые фильтры цвета/материала/… остаются), чтобы не вернуть
-        # «не найдено». Ограничения тогда работают только как сигнал ранжирования.
-        if not priced and spec.attr_constraints:
-            filtered = [
-                c for c in candidates
-                if self._passes_filters(spec, c, ignore_constraints=True)
-            ]
+        """Кандидаты, прошедшие фильтры, отсортированные по взвешенному скорингу.
+
+        Если под все требования не нашлось ничего, требования снимаются ПО ОЧЕРЕДИ,
+        и порядок здесь принципиален: первым гнётся ГАБАРИТ, и только потом — тип
+        техники, названный клиентом.
+
+        Раньше было наоборот, и на живом запросе «вытяжка полновстр. 450» бот
+        выбрасывал условие «полновстраиваемая», держался за 450 мм и выдавал
+        ОСТРОВНУЮ вытяжку за 92 990 ₽ — при том что полновстраиваемые того же
+        бренда шириной 495 мм стоят 13 690 ₽. Островная и встраиваемая — разные
+        по сути приборы (одна висит под потолком, вторая прячется в шкаф), а
+        ±50 мм ширины клиент переживёт. Тип важнее габарита.
+        """
+        # Порядок смягчений: чем дальше, тем больше требований снято.
+        relaxations: list[dict] = [
+            {},                                                 # всё, как просил клиент
+            {"ignore_dims": True},                              # гнём габарит/конфорки
+            {"ignore_constraints": True},                       # гнём характеристики
+            {"ignore_constraints": True, "ignore_dims": True},  # последняя попытка
+        ]
+        priced: list[CatalogProduct] = []
+        for kwargs in relaxations:
+            filtered = [c for c in candidates if self._passes_filters(spec, c, **kwargs)]
             priced = [c for c in filtered if c.price is not None]
-        # Смягчение размеров: точное число конфорок / ширина часто редки (3-конф.
-        # электрических почти нет; «духовка 450» = высота компакта, а не ширина).
-        # Если жёсткий размер обнулил выдачу — снимаем его, оставляя сигналом
-        # ранжирования: подбор вернёт БЛИЖАЙШЕЕ, а не «не найдено».
-        if not priced and (spec.width_mm or spec.burners):
-            filtered = [
-                c for c in candidates
-                if self._passes_filters(spec, c, ignore_constraints=True, ignore_dims=True)
-            ]
-            priced = [c for c in filtered if c.price is not None]
+            if priced:
+                break
         if not priced:
             return []
         # Ценовой потолок («до 30000»): оставляем только то, что в бюджет. Если в

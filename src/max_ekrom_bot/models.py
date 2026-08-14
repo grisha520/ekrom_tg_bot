@@ -99,10 +99,14 @@ class ProductSpec(BaseModel):
         if v is None:
             return []
         if isinstance(v, list):
-            # Отсеиваем мусор без имени атрибута/значения.
+            # Отсеиваем мусор без имени атрибута/значения. Готовые AttrConstraint
+            # пропускаем как есть: раньше они молча исчезали (проверка была только
+            # на dict), и код, строящий спеки программно, терял ограничения.
             out = []
             for it in v:
-                if isinstance(it, dict) and str(it.get("attribute") or "").strip() \
+                if isinstance(it, AttrConstraint):
+                    out.append(it)
+                elif isinstance(it, dict) and str(it.get("attribute") or "").strip() \
                         and str(it.get("value") or "").strip():
                     out.append(it)
             return out

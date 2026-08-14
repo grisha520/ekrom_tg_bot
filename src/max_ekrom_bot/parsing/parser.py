@@ -7,9 +7,10 @@ LLM возвращает строгий JSON, который валидируе�
 from __future__ import annotations
 
 import json
+import re
 
 from ..llm import LLMProvider, get_llm_provider
-from ..models import CustomerRequest
+from ..models import CustomerRequest, ProductSpec
 
 SYSTEM_PROMPT = """\
 Ты — ассистент по подбору встраиваемой бытовой техники в магазине ekrom.ru.
@@ -54,6 +55,21 @@ SYSTEM_PROMPT = """\
   это НЕ cooktop (cooktop — только встраиваемая варочная панель). "Морозильная
   камера/морозильник" → unknown, это НЕ fridge (fridge — только холодильник).
 - Размеры в сантиметрах переводи в миллиметры (60 → 600, 45 → 450).
+- ШИРИНУ НЕ ВЫДУМЫВАЙ. width_mm заполняй, ТОЛЬКО если клиент прямо назвал размер
+  («на 60», «45 см», «шириной 600»). Число рядом с прибором почти всегда значит
+  другое — не переноси его в ширину:
+    • количество конфорок: «варка 4х», «на 2 конфорки», «на три комф.» → burners,
+      width_mm = null (у «4х» НЕТ значения 450 мм!);
+    • количество программ/комплектов/камер → extra;
+    • ГЛУБИНА/ВЫСОТА («глубина 31 см», «высотой 45») → extra
+      ({"глубина": "310"}), это НЕ ширина.
+  Если не уверен, о каком размере речь, — оставь width_mm = null: пустое поле
+  расширяет подбор, а придуманная ширина отсекает нужный товар совсем.
+- ПРИЗНАКИ НЕ ПЕРЕНОСИ МЕЖДУ ПОЗИЦИЯМИ. Каждый пункт списка разбирай отдельно:
+  цвет, размер, тип установки и нагрев из одной строки НЕ приписывай соседней.
+  Пример: «варка 4х электрика — духовой — вытяжка полновстраиваемая»: слово
+  «полновстраиваемая» относится ТОЛЬКО к вытяжке; у варочной панели install_type
+  и width_mm остаются null.
 - Если указан производитель (Korting, Bosch, Maunfield, Lex…) — заполни brand.
 - Если указана конкретная модель/артикул (например "OGG 771 CFX", "HBF011BR0T") —
   заполни model как написано (латиница/цифры, без бренда). Бренд при этом — в brand.
@@ -88,6 +104,45 @@ SYSTEM_PROMPT = """\
 """
 
 
+# Ширина названа явно: «450», «45 см», «45см». Число конфорок («4х», «на 2») под
+# это не подходит — там нет ни единиц, ни самого размера.
+def _mentions_width(text: str, width_mm: int) -> re.Match | None:
+    cm = width_mm // 10
+    return (
+        re.search(rf"\b{width_mm}\b", text)
+        or re.search(rf"\b{cm}\s*(?:см|cm)\b", text)
+        or re.search(rf"\b{cm}\b(?!\s*(?:конфор|комф|прибор|предмет|шт))", text)
+    )
+
+
+def drop_phantom_width(spec: ProductSpec) -> ProductSpec:
+    """Убрать ширину, которой клиент не называл (правит spec на месте).
+
+    Страховка под промптом: модель принимала «варка 4х» за 450 мм, и позиция с
+    несуществующим требованием выпадала из подбора целиком — у бренда просто нет
+    45-см электрических варочных на 4 конфорки. Пустая ширина расширяет подбор,
+    придуманная — отсекает нужный товар.
+
+    Также ловим случай, когда число относится к ГЛУБИНЕ или ВЫСОТЕ («глубина 31
+    см» у встраиваемой СВЧ): такой размер уезжает в `extra`, а не в ширину.
+    """
+    if not spec.width_mm:
+        return spec
+    text = (spec.raw_text or "").lower()
+    hit = _mentions_width(text, spec.width_mm)
+    if hit is None:
+        spec.width_mm = None
+        return spec
+    # Размер назван, но это глубина/высота — в ширину он не годится.
+    before = text[max(0, hit.start() - 20):hit.start()]
+    for word, key in (("глубин", "глубина"), ("высот", "высота")):
+        if word in before:
+            spec.extra.setdefault(key, str(spec.width_mm))
+            spec.width_mm = None
+            break
+    return spec
+
+
 class RequestParser:
     def __init__(self, llm: LLMProvider | None = None) -> None:
         self._llm = llm or get_llm_provider()
@@ -100,5 +155,7 @@ class RequestParser:
             raise ValueError(f"LLM вернул невалидный JSON: {raw!r}") from exc
 
         request = CustomerRequest.model_validate(data)
+        for spec in request.specs:
+            drop_phantom_width(spec)
         request.original_message = message
         return request
