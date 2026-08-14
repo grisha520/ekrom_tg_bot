@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..models import SelectionResult
+from ..showrooms import SHOWROOMS
 
 _ASSETS = Path(__file__).parent / "assets"
 
@@ -73,8 +74,45 @@ _IC = {
     "pin": '<svg viewBox="0 0 24 24" width="12" height="12" fill="#3b6fd4"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7zm0 9.5A2.5 2.5 0 1112 6a2.5 2.5 0 010 5z"/></svg>',
 }
 
-_HIDE_ATTRS = {"промо", "остаток поставщика", "производитель", "страна производитель"}
+# Что и в каком порядке показывать в «Характеристиках» — сверено с документом
+# сайта (document (1).pdf, 14.08.2026, комплект Midea из 4 позиций).
+#
+# Сайт печатает не «первые попавшиеся» атрибуты, а фиксированную шапку
+# (артикул → цвет → модель → страна → гарантия → высота → вес/объём), а следом —
+# специфичные для категории (конфорки/программы/таймер…). Габариты, кроме
+# высоты, в документ не попадают вовсе: ни ширина, ни глубина, ни размеры
+# встраивания. Без этого порядка наш PDF показывал сплошные габариты и на
+# эталон был не похож.
+_ATTR_PRIORITY: tuple[str, ...] = (
+    "артикул", "цвет", "модель", "страна производ", "гарантия",
+    "высота, мм", "вес", "объем", "объём",
+)
+# Подстроки полей, которых в документе корзины нет (служебные + габариты).
+_HIDE_ATTR_SUBS: tuple[str, ...] = (
+    "промо", "остаток поставщика", "производитель, ",
+    "ширина", "глубина", "встраивания",
+)
 _MAX_ATTRS = 11
+
+
+def _warranty_months(value: str | None) -> str:
+    """«24» → «24 месяца» (форма слова по числу, как в документе сайта)."""
+    if not value or not value.strip("-"):
+        return "-"
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if not digits:
+        return _html.escape(value)
+    n = int(digits)
+    tail = n % 100
+    if 11 <= tail <= 14:
+        word = "месяцев"
+    elif n % 10 == 1:
+        word = "месяц"
+    elif n % 10 in (2, 3, 4):
+        word = "месяца"
+    else:
+        word = "месяцев"
+    return f"{n} {word}"
 
 
 def _esc(v: object) -> str:
@@ -95,17 +133,30 @@ def _attr(product, *subs: str) -> str | None:
 
 
 def _char_rows(product) -> str:
-    rows = []
+    """Строки «Характеристик» в порядке документа сайта (см. _ATTR_PRIORITY)."""
+    usable: list[tuple[str, str]] = []
     for k, v in (product.attributes or {}).items():
-        if k.lower() in _HIDE_ATTRS:
+        low = k.lower()
+        if any(sub in low for sub in _HIDE_ATTR_SUBS):
             continue
         val = (v or "").replace("\n", ", ").strip()
-        if not val:
-            continue
-        rows.append(f'<tr><td class="k">{_esc(k)}</td><td class="v">{_esc(val)}</td></tr>')
-        if len(rows) >= _MAX_ATTRS:
-            break
-    return "".join(rows)
+        if val:
+            usable.append((k, val))
+
+    def rank(pair: tuple[str, str]) -> int:
+        low = pair[0].lower()
+        for i, pref in enumerate(_ATTR_PRIORITY):
+            if low.startswith(pref) or pref in low:
+                return i
+        return len(_ATTR_PRIORITY)
+
+    # Приоритетные — в заданном порядке, остальные — как пришли из каталога
+    # (там они идут по категории: конфорки, программы, таймер…).
+    ordered = sorted(usable, key=lambda p: (rank(p), usable.index(p)))
+    return "".join(
+        f'<tr><td class="k">{_esc(k)}</td><td class="v">{_esc(v)}</td></tr>'
+        for k, v in ordered[:_MAX_ATTRS]
+    )
 
 
 def _photo(product) -> str:
@@ -130,8 +181,10 @@ def _card(item) -> str:
     art = _attr(p, "артикул")
     title = _esc(p.title.upper()) + (f" ({_esc(art)})" if art else "")
     country = _attr(p, "страна производ") or "-"
-    warranty = _attr(p, "гарант")
-    warranty = f"{warranty} месяцев" if warranty and warranty.strip("-") else "-"
+    warranty = _warranty_months(_attr(p, "гарант"))
+    # Ссылки «Инструкция/Схема» ведут на карточку товара: отдельных URL файлов в
+    # каталоге нет, а мёртвая ссылка в документе хуже отсутствующей.
+    doc_href = _esc(p.url or "")
     return f"""
     <div class="card">
       <div class="card__title">{title}</div>
@@ -143,7 +196,7 @@ def _card(item) -> str:
       </div>
       <div class="card__foot">
         <div class="dl"><div class="dl__t">Ссылки для скачивания</div>
-          <a>Инструкция</a><a>Схема</a></div>
+          <a href="{doc_href}">Инструкция</a><a href="{doc_href}">Схема</a></div>
         <div class="meta"><div class="meta__ic">{_flag(country)}</div>
           <div><div class="meta__t">Страна<br>производства</div><b>{_esc(country)}</b></div></div>
         <div class="meta"><div class="meta__ic">{_IC['hammer']}</div>
@@ -169,10 +222,15 @@ def _total_block(selection: SelectionResult, settings, combo) -> str:
         gift_row = (f'<div class="trow"><span>В подарок: {_esc(combo.gift_title)}</span>'
                     f'<span class="tval">бесплатно</span></div>')
 
-    from ..messenger.client_ux import _SHOWROOMS
+    # Шоурумы ТОЛЬКО города документа: в эталоне под «Корзина от … (г. Екатеринбург)»
+    # перечислены три екатеринбургских адреса, и текст рядом обещает «в 3-х
+    # шоурумах». Печатать здесь Тюмень — обещать клиенту то, чего в его городе нет.
+    doc_city = (getattr(settings, "pdf_city", "") or "").strip().lower()
+    matched_rooms = [lst for city, lst in SHOWROOMS if city.lower() == doc_city]
+    city_rooms = matched_rooms[0] if matched_rooms else SHOWROOMS[0][1]
     rooms = "".join(
         f'<div class="room">{_IC["pin"]}<span>{_esc(r.split(" · ")[0])}</span></div>'
-        for _city, lst in _SHOWROOMS for r in lst
+        for r in city_rooms
     )
     mgr_name = _esc(settings.manager_name or "Менеджер")
     mgr = f"""
@@ -197,7 +255,7 @@ def _total_block(selection: SelectionResult, settings, combo) -> str:
       <div class="serv"><div class="serv__ic">{_IC['box']}</div>
         <div>Можно <b>хранить</b> товар на складе до монтажа <b>бесплатно</b> в течение 90 календарных дней</div></div>
       <div class="serv"><div class="serv__ic">{_IC['list']}</div>
-        <div>Можно технику посмотреть в 3-х шоурумах. А также в режиме <b>онлайн</b> с помощью менеджера</div></div>
+        <div>Можно технику посмотреть в {len(city_rooms)}-х шоурумах. А также в режиме <b>онлайн</b> с помощью менеджера</div></div>
       {mgr}
     </div>
     <div class="watermark">ekrom</div>"""
@@ -220,7 +278,12 @@ body{{font-family:'Rubik',sans-serif;color:#12232c;font-size:11px;-webkit-print-
 .phone{{color:#fff;font-size:15px;font-weight:500;text-decoration:underline;text-underline-offset:3px}}
 .wrap{{padding:0 34px}}
 .subtitle{{color:#8a8a8a;font-size:10.5px;margin-bottom:18px}}
-.card{{border-bottom:1px solid #e6e6e6;padding-bottom:16px;margin-bottom:16px}}
+/* Карточка и блок «Итого» не разрываются между страницами: в документе сайта
+   товар всегда целиком на одной странице, а у нас цена уезжала на предыдущую,
+   футер — на следующую. */
+.card{{border-bottom:1px solid #e6e6e6;padding-bottom:16px;margin-bottom:16px;
+  page-break-inside:avoid;break-inside:avoid}}
+.total{{page-break-inside:avoid;break-inside:avoid}}
 .card__title{{font-weight:700;font-size:16px;letter-spacing:.2px;margin-bottom:14px}}
 .card__body{{display:flex;gap:22px}}
 .ph{{width:200px;height:200px;border:1px solid #e6e6e6;border-radius:18px;flex:none;display:flex;align-items:center;justify-content:center;overflow:hidden}}
@@ -272,7 +335,7 @@ body{{font-family:'Rubik',sans-serif;color:#12232c;font-size:11px;-webkit-print-
 .watermark{{text-align:center;font-weight:700;font-size:120px;color:#f2f2f2;letter-spacing:8px;margin-top:20px;line-height:1}}
 </style></head><body>
 <div class="top"><span class="logo">{_logo_svg()}</span><span class="phone">{phone}</span></div>
-<div class="wrap"><div class="subtitle">Комплект от {stamp} &nbsp;(г. {city})</div>{cards}</div>
+<div class="wrap"><div class="subtitle">Корзина от {stamp} &nbsp;(г. {city})</div>{cards}</div>
 {_total_block(selection, settings, combo)}
 </body></html>"""
 

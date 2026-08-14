@@ -13,6 +13,7 @@ _MSK = timezone(timedelta(hours=3))
 from ..config import Settings
 from ..models import SelectionResult
 from ..pick_history import PickRecord
+from ..showrooms import SHOWROOMS
 from .telegram_format import _fmt_price, format_selection
 
 # Готовые запросы для кнопок «Примеры» (callback ex:0 … ex:N-1). Специально
@@ -108,25 +109,11 @@ def examples_text() -> str:
     return "\n".join(lines)
 
 
-# Шоурумы и почта — со страницы контактов ekrom.ru/contacts/ (при смене данных
-# на сайте поправить здесь).
+# Почта — со страницы контактов ekrom.ru/contacts/. Адреса шоурумов живут в
+# `max_ekrom_bot.showrooms`: их же берут генераторы PDF, а тянуть их оттуда
+# через этот модуль нельзя — он импортирует aiogram (см. showrooms.py).
 _SHOP_EMAIL = "sale@ekrom.ru"
-_SHOWROOMS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (
-        "Екатеринбург",
-        (
-            "ИЦ «Уют Холл» — ул. Толмачева, 22, 2 этаж · ежедневно 10:00–20:00",
-            "ИЦ ASTROOM — ул. Цвиллинга, 1, корп. Б, 9 этаж · ежедневно 10:00–20:00",
-            "МЦ ЭМА — Верх-Исетский бул., 13, 5 этаж · ежедневно 10:00–20:00",
-        ),
-    ),
-    (
-        "Тюмень",
-        (
-            "Шоурум — ул. Герцена, 55 · пн–пт 9:00–20:00, сб–вс 10:00–18:00",
-        ),
-    ),
-)
+_SHOWROOMS = SHOWROOMS
 
 
 def contacts_text(settings: Settings) -> str:

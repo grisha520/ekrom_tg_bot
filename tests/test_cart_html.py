@@ -86,3 +86,165 @@ def test_html_zero_discount_shows_row():
     combo = ComboResult(mechanic="none", subtotal=85514, discount_total=0, final_total=85514)
     html = build_cart_html(_sel(), _S, combo)
     assert "Индивидуальная скидка" in html
+
+
+# ── Сверка с эталоном сайта (document (1).pdf от 14.08.2026) ──────────────────
+
+def test_subtitle_says_korzina_like_reference():
+    # В документе сайта шапка — «Корзина от <дата> <время> (г. …)», не «Комплект».
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    item = MatchedItem(
+        spec=ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовка"),
+        product=CatalogProduct(title="Духовой шкаф", url="u", price=1000),
+        candidates_count=1,
+    )
+    html = build_cart_html(SelectionResult(items=[item]), Settings(telegram_bot_token="x"))
+    assert "Корзина от" in html
+    assert "Комплект от" not in html
+
+
+def test_warranty_word_form_matches_reference():
+    # Эталон: «Срок гарантии 24 месяца» (не «24 месяцев»).
+    from max_ekrom_bot.pdf.cart_html import _warranty_months
+
+    assert _warranty_months("24") == "24 месяца"
+    assert _warranty_months("12 мес") == "12 месяцев"
+    assert _warranty_months("1") == "1 месяц"
+    assert _warranty_months("36") == "36 месяцев"
+    assert _warranty_months("") == "-"
+    assert _warranty_months("-") == "-"
+
+
+def test_country_row_kept_in_characteristics():
+    # В эталоне «Страна производитель Китай» присутствует В характеристиках.
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    product = CatalogProduct(
+        title="Газовая варочная панель Midea MG449TGB черная", url="u", price=14990,
+        attributes={"Артикул": "MG449TGB", "Страна производитель": "Китай",
+                    "Гарантия, мес": "24", "Промо": "служебное"},
+    )
+    item = MatchedItem(
+        spec=ProductSpec(appliance=ApplianceType.COOKTOP, raw_text="варочная"),
+        product=product, candidates_count=1,
+    )
+    html = build_cart_html(SelectionResult(items=[item]), Settings(telegram_bot_token="x"))
+    assert "Страна производитель" in html
+    assert "Промо" not in html            # служебные поля по-прежнему скрыты
+    assert "24 месяца" in html
+
+
+def test_download_links_point_to_product():
+    # «Инструкция/Схема» без href — мёртвые ссылки; ведём на карточку товара.
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    item = MatchedItem(
+        spec=ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовка"),
+        product=CatalogProduct(title="Духовой шкаф",
+                               url="https://www.ekrom.ru/products/oven/", price=1000),
+        candidates_count=1,
+    )
+    html = build_cart_html(SelectionResult(items=[item]), Settings(telegram_bot_token="x"))
+    assert 'href="https://www.ekrom.ru/products/oven/">Инструкция' in html
+
+
+def test_pdf_layer_does_not_import_messenger():
+    # Регресс: генераторы PDF брали шоурумы из client_ux (тянет aiogram, который
+    # при импорте подменяет политику asyncio на uvloop) — Chromium падал, и PDF
+    # молча уходил в reportlab-фолбэк. Слой печати не должен знать о мессенджере.
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "src" / "max_ekrom_bot" / "pdf"
+    for path in src.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "messenger" not in text, f"{path.name} импортирует слой мессенджера"
+
+
+def test_characteristics_follow_reference_order():
+    # Эталон Midea MG449TGB: артикул → цвет → модель → страна → гарантия →
+    # высота → вес → специфичные (конфорки…). Габариты, кроме высоты, сайт не
+    # печатает вовсе — иначе карточка забивается «ширина/глубина/встраивание».
+    import re
+
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    product = CatalogProduct(
+        title="Газовая варочная панель Midea MG449TGB черная", url="u", price=14990,
+        attributes={
+            "Ширина, мм": "450", "Глубина, мм": "510", "Высота, мм": "102",
+            "Ширина встраивания, мм": "410", "Глубина встраивания, мм": "480",
+            "Цвет": "Черный", "Количество конфорок": "3 конфорки",
+            "Артикул": "MG449TGB", "Модель": "MG449TGB",
+            "Страна производитель": "Китай", "Гарантия, мес": "24",
+            "Вес, кг": "11.52", "Электроподжиг": "Да",
+        },
+    )
+    item = MatchedItem(
+        spec=ProductSpec(appliance=ApplianceType.COOKTOP, raw_text="варочная"),
+        product=product, candidates_count=1,
+    )
+    html = build_cart_html(SelectionResult(items=[item]), Settings(telegram_bot_token="x"))
+    keys = re.findall(r'<td class="k">([^<]+)</td>', html)
+
+    assert keys[:7] == ["Артикул", "Цвет", "Модель", "Страна производитель",
+                        "Гарантия, мес", "Высота, мм", "Вес, кг"]
+    assert "Количество конфорок" in keys       # специфичные — следом
+    # Габариты, кроме высоты, в документ не попадают.
+    assert not any(k.startswith(("Ширина", "Глубина")) for k in keys)
+    assert not any("встраивания" in k for k in keys)
+
+
+def test_showrooms_limited_to_document_city():
+    # Документ формируется для конкретного города («Корзина от … (г. N)»).
+    # Печатать шоурумы другого города — обещать то, чего у клиента нет.
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    item = MatchedItem(
+        spec=ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовка"),
+        product=CatalogProduct(title="Духовой шкаф", url="u", price=1000),
+        candidates_count=1,
+    )
+    sel = SelectionResult(items=[item])
+
+    # Settings принимает ТОЛЬКО алиасы (PDF_CITY): форму с именем поля
+    # pydantic молча игнорирует из-за extra="ignore".
+    ekb = build_cart_html(sel, Settings(telegram_bot_token="x", PDF_CITY="Екатеринбург"))
+    assert "Толмачева" in ekb
+    assert "Герцена" not in ekb            # тюменский адрес не попадает
+    assert "в 3-х шоурумах" in ekb          # число согласовано со списком
+
+    tmn = build_cart_html(sel, Settings(telegram_bot_token="x", PDF_CITY="Тюмень"))
+    assert "Герцена" in tmn and "Толмачева" not in tmn
+    assert "в 1-х шоурумах" in tmn
+
+
+def test_cards_do_not_split_across_pages():
+    # В документе сайта товар всегда целиком на одной странице.
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.models import (
+        ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult,
+    )
+
+    item = MatchedItem(
+        spec=ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовка"),
+        product=CatalogProduct(title="Духовой шкаф", url="u", price=1000),
+        candidates_count=1,
+    )
+    html = build_cart_html(SelectionResult(items=[item]), Settings(telegram_bot_token="x"))
+    assert "break-inside:avoid" in html

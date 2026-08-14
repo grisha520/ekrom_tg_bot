@@ -33,6 +33,7 @@ from reportlab.platypus import (
 )
 
 from ..models import SelectionResult
+from ..showrooms import SHOWROOMS
 from .offer import _fetch_image, _register_font, _FONT, _FONT_BOLD
 
 if TYPE_CHECKING:
@@ -294,9 +295,8 @@ def build_cart_style_pdf(
             story.append(Paragraph(f"Телефон: {settings.manager_phone}", st["base"]))
         story.append(Paragraph(f"Городской телефон: {settings.manager_city_phone}", st["base"]))
 
-    from ..messenger.client_ux import _SHOWROOMS
     story.append(Spacer(1, 2 * mm))
-    for _city, rooms in _SHOWROOMS:
+    for _city, rooms in SHOWROOMS:
         for room in rooms:
             story.append(Paragraph("• " + room.split(" · ")[0], st["box"]))
 
