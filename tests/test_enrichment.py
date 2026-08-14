@@ -148,3 +148,77 @@ def test_width_tolerance_595_matches_600():
     b = _p("Духовка B", {}, price=200)
     ranked = sel.ranked_candidates(spec, [b, a])  # b раньше по входу
     assert ranked[0].title == "Духовка A"  # совпадение ширины поднимает A выше
+
+
+# ── Обновление фото в ночном крауле ──────────────────────────────────────────
+
+_PAGE = '''
+<html><head><meta property="og:image" content="/ogimage.jpg"></head><body>
+<a class="catalog-popup__menu-link" href="/catalog/x/">
+  <img src="/upload/iblock/1fc/menu_icon.png"></a>
+<div class="slide skeleton">
+  <img class="lazyload" src="/upload/iblock/d8a/glavnoe_foto.jpg"></div>
+<div class="slide skeleton">
+  <img class="lazyload" src="/upload/iblock/827/vtoroe_foto.jpg"></div>
+<a href="/products/other/" class="similar__img-box">
+  <img src="/upload/iblock/7fa/pohozhiy_tovar.jpg"></a>
+</body></html>
+'''
+
+
+def test_parse_image_takes_gallery_photo_not_menu_icon():
+    from max_ekrom_bot.ekrom.crawler import _parse_image
+
+    # Иконка меню идёт РАНЬШЕ в HTML, но она без class="lazyload" и в .png.
+    assert _parse_image(_PAGE) == "/upload/iblock/d8a/glavnoe_foto.jpg"
+
+
+def test_parse_image_none_without_photos():
+    from max_ekrom_bot.ekrom.crawler import _parse_image
+
+    assert _parse_image("<html><body>нет фото</body></html>") is None
+
+
+def test_update_image_keeps_attributes(tmp_path):
+    # update_enrichment перезаписывает характеристики целиком, поэтому для
+    # картинки нужен отдельный метод — иначе ночной прогон стёр бы атрибуты.
+    from max_ekrom_bot.ekrom.catalog_cache import CatalogCache
+    from max_ekrom_bot.models import CatalogProduct
+
+    cache = CatalogCache(tmp_path / "c.db")
+    cache.upsert_many([CatalogProduct(url="/products/a/", title="Духовой шкаф Korting",
+                                      price=1000)], "/cat/")
+    cache.update_enrichment("/products/a/", {"Цвет": "Черный"}, "/old.jpg")
+    cache.update_image("/products/a/", "/new.jpg")
+
+    got = cache.query_category("/cat/")[0]
+    assert got.image_url == "/new.jpg"
+    assert got.attributes.get("Цвет") == "Черный"      # характеристики целы
+
+
+def test_urls_missing_image_prioritises_target_brands(tmp_path):
+    from max_ekrom_bot.ekrom.catalog_cache import CatalogCache
+    from max_ekrom_bot.models import CatalogProduct
+
+    cache = CatalogCache(tmp_path / "c.db")
+    cache.upsert_many([
+        CatalogProduct(url="/p/bosch/", title="Духовой шкаф Bosch", price=100),
+        CatalogProduct(url="/p/korting/", title="Духовой шкаф Korting", price=100),
+        CatalogProduct(url="/p/noprice/", title="Духовой шкаф Midea", price=None),
+    ], "/cat/")
+    urls = cache.urls_missing_image(("korting", "maunfeld"))
+    assert urls[0] == "/p/korting/"          # наш бренд — первым
+    assert "/p/bosch/" in urls
+    assert "/p/noprice/" not in urls          # без цены не подбираем — не грузим
+
+
+def test_image_pairs_only_with_image(tmp_path):
+    from max_ekrom_bot.ekrom.catalog_cache import CatalogCache
+    from max_ekrom_bot.models import CatalogProduct
+
+    cache = CatalogCache(tmp_path / "c.db")
+    cache.upsert_many([
+        CatalogProduct(url="/p/a/", title="A", price=1, image_url="/a.jpg"),
+        CatalogProduct(url="/p/b/", title="B", price=1),
+    ], "/cat/")
+    assert cache.image_pairs() == [("/p/a/", "/a.jpg")]

@@ -166,6 +166,46 @@ class CatalogCache:
             ).fetchone()
         return (row[0], float(row[1])) if row else None
 
+    def update_image(self, url: str, image_url: str | None) -> None:
+        """Записать ТОЛЬКО ссылку на фото, не трогая характеристики.
+
+        Отдельный метод нужен потому, что `update_enrichment` перезаписывает
+        `attributes` целиком: вызвать его ради одной картинки — стереть уже
+        собранные характеристики товара.
+        """
+        if not url or not image_url:
+            return
+        with self._conn() as c:
+            c.execute("UPDATE products SET image_url=? WHERE url=?", (image_url, url))
+
+    def image_pairs(self) -> list[tuple[str, str]]:
+        """(URL товара, ссылка на фото) — для проверки, что ссылки ещё живы."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT url, image_url FROM products "
+                "WHERE image_url IS NOT NULL AND image_url<>''"
+            ).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def urls_missing_image(self, priority_brands: tuple[str, ...] = ()) -> list[str]:
+        """URL товаров без фото; бренды из `priority_brands` — первыми.
+
+        Приоритет нужен, потому что фото добираются с ограничением за прогон:
+        сначала то, что бот реально предлагает клиенту (пять брендов проекта),
+        остальной каталог — по остаточному принципу в следующие ночи.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT url, title FROM products "
+                "WHERE (image_url IS NULL OR image_url='') AND price IS NOT NULL"
+            ).fetchall()
+        low = tuple(b.lower() for b in priority_brands)
+        first, rest = [], []
+        for url, title in rows:
+            t = (title or "").lower()
+            (first if any(b in t for b in low) else rest).append(url)
+        return first + rest
+
     def urls_without_attributes(self) -> list[str]:
         """URL товаров, у которых ещё нет характеристик — для инкрементального
         обогащения краулером (уже обогащённые не трогаем при повторных прогонах)."""
