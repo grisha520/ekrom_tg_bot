@@ -358,3 +358,68 @@ def test_within_budget_no_flag():
     cands = [[_p("Korting", "Духовой шкаф", 40990)]]
     kit = build_brand_kit("Korting", specs, cands, [])
     assert kit.selection.matched[0].reason == ""
+
+
+# ── Пометки о замене: тип/цвет/ширина, а не только бюджет ─────────────────────
+
+def test_replacement_note_domino_not_found():
+    # E2E на проде: «варочная панель домино» закрылась обычной 60-см панелью
+    # молча. Замена допустима, но клиент обязан узнать об этом из сообщения.
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=COOKTOP, raw_text="варочная панель домино")
+    wide = CatalogProduct(title="Варочная панель Korting HG 465 CTRN",
+                          url="u", price=35990, attributes={"Ширина": "600 мм"})
+    note = replacement_note(spec, wide)
+    assert "домино" in note.lower()
+
+    narrow = CatalogProduct(title="Варочная панель домино Korting HG 300",
+                            url="u2", price=21000, attributes={"Ширина": "290 мм"})
+    assert replacement_note(spec, narrow) == ""   # домино нашлось — молчим
+
+
+def test_replacement_note_color_mismatch():
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=OVEN, raw_text="духовка белая", color="белый")
+    black = CatalogProduct(title="Духовой шкаф Korting OKB 481 чёрный", url="u",
+                           price=40000)
+    assert "цвет" in replacement_note(spec, black).lower()
+    white = CatalogProduct(title="Духовой шкаф Korting OKB 7951 CMW белый", url="u2",
+                           price=42000)
+    assert replacement_note(spec, white) == ""
+
+
+def test_replacement_note_silent_without_data():
+    # Характеристик нет и цвет в названии не заявлен — молчим, а не выдумываем.
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=OVEN, raw_text="духовка белая", color="белый")
+    unknown = CatalogProduct(title="Духовой шкаф Korting OKB 481", url="u", price=40000)
+    assert replacement_note(spec, unknown) == ""
+
+
+def test_replacement_note_combines_reasons():
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=OVEN, raw_text="духовка белая до 30000",
+                       color="белый", max_price=30000)
+    prod = CatalogProduct(title="Духовой шкаф Korting OKB 481 чёрный", url="u",
+                          price=40990)
+    note = replacement_note(spec, prod)
+    assert "бюджет" in note.lower() and "цвет" in note.lower()
+
+
+def test_rivals_recorded_for_explanation():
+    # Победитель хранит проигравшие бренды — из них строится объяснение выбора.
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD)]
+    cands = [
+        [_p("Korting", "Духовой шкаф", 40000), _p("Midea", "Духовой шкаф", 35000)],
+        [_p("Korting", "Варочная панель", 25000), _p("Midea", "Варочная панель", 24000)],
+        [_p("Korting", "Вытяжка", 15000)],          # вытяжка только у Korting
+    ]
+    camp = {"Korting": [CASCADE], "Midea": [FLAT]}.get
+    best = choose_best_kit(specs, cands, camp, brands=("Korting", "Midea"))
+    assert best.brand == "Korting"
+    assert [r.brand for r in best.rivals] == ["Midea"]
+    assert best.rivals[0].coverage == 2          # Midea закрыла лишь 2 из 3

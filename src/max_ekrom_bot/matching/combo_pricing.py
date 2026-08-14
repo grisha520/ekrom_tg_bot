@@ -66,6 +66,9 @@ class ComboResult:
     campaign_slug: str | None = None            # какая акция дала этот результат
     campaign_title: str | None = None           # её название (для показа клиенту)
     campaign_period_to: str | None = None       # ISO-дата окончания акции (или None)
+    # Другие акции бренда, посчитанные для этого же комплекта: (название, выгода).
+    # Нужны, чтобы объяснить клиенту выбор фактами, а не постфактум-рассуждением.
+    alternatives: list[tuple[str, float]] = field(default_factory=list)
 
 
 # Механики, чей итог автоматически считать нельзя — их размечаем на менеджера.
@@ -367,9 +370,17 @@ def best_combo(
     results = [compute_combo(items, c, gift_value) for c in campaigns]
     applied = [r for r in results if r.applied]
     if applied:
-        return max(applied, key=lambda r: r.discount_total)
-    review = [r for r in results if r.manager_review]
-    return review[0] if review else compute_combo(items, None)
+        best = max(applied, key=lambda r: r.discount_total)
+    else:
+        review = [r for r in results if r.manager_review]
+        best = review[0] if review else compute_combo(items, None)
+    # Проигравшие варианты запоминаем: из них строится объяснение выбора клиенту.
+    best.alternatives = [
+        (r.campaign_title or r.campaign_slug or "", r.discount_total)
+        for r in results
+        if r is not best and r.applied and (r.campaign_title or r.campaign_slug)
+    ]
+    return best
 
 
 def make_gift_valuer(catalog_lookup: object):

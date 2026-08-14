@@ -27,7 +27,8 @@ from dataclasses import dataclass, field
 from ..models import ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult
 from .combo_pricing import ComboItem, ComboResult, best_combo
 from .selector import (
-    ProductSelector, _COLOR_FAMILY, _product_colors, _product_install, _product_width,
+    ProductSelector, _canon_color, _COLOR_FAMILY, _product_colors, _product_fuels,
+    _product_install, _product_width,
 )
 
 # Пять брендов проекта (дублируем как строки, чтобы не тянуть сетевой модуль promos).
@@ -86,6 +87,16 @@ def client_brands(specs: list[ProductSpec], original_message: str = "") -> tuple
 
 
 @dataclass
+class BrandRival:
+    """Комплект другого бренда, проигравший при выборе (для объяснения клиенту)."""
+
+    brand: str
+    coverage: int
+    benefit: float
+    design_consistent: bool
+
+
+@dataclass
 class BrandKit:
     """Комплект одного бренда: подобранные позиции + итог акции + оценка дизайна."""
 
@@ -97,6 +108,7 @@ class BrandKit:
     design_consistent: bool             # согласован ли комплект по цвету/финишу
     design_note: str = ""
     manager_specs: list[ProductSpec] = field(default_factory=list)  # позиции → менеджеру
+    rivals: list[BrandRival] = field(default_factory=list)  # проигравшие бренды
 
     @property
     def is_full(self) -> bool:
@@ -111,6 +123,61 @@ class BrandKit:
             self.combo.discount_total,
             -self.combo.final_total,
         )
+
+
+def _fmt_rub(v: float | int) -> str:
+    return f"{int(v):,}".replace(",", " ") + " ₽"
+
+
+def replacement_note(spec: ProductSpec, product: CatalogProduct) -> str:
+    """Чем подобранный товар расходится с запросом клиента (или пусто).
+
+    Полнота комплекта важнее точного совпадения (правило заказчика «нет
+    идеального → ближайшее»), но расхождение обязано быть НАЗВАНО: клиент должен
+    увидеть его в сообщении, а не в счёте у менеджера. Молчание разрешено только
+    когда данных нет — характеристики карточки бывают пустыми, и выдумывать
+    несоответствие по молчанию нельзя.
+    """
+    notes: list[str] = []
+    price = product.price or 0
+
+    if spec.max_price and price > spec.max_price:
+        notes.append(f"дороже бюджета (до {_fmt_rub(spec.max_price)})")
+
+    if spec.color:
+        want = _canon_color(spec.color)
+        have = _product_colors(product)
+        if have and want not in have:
+            notes.append(f"цвет «{', '.join(sorted(have))}» вместо «{spec.color}»")
+
+    # «Домино» — узкая (около 300 мм) варочная панель. Просьбу распознаём по
+    # словам клиента: отдельного поля под тип панели в спецификации нет.
+    width = _product_width(product)
+    wants_domino = "домино" in (spec.raw_text or "").lower()
+    if wants_domino:
+        if width is None or width > 400:
+            notes.append("не домино — узкой панели у бренда не нашлось")
+    elif spec.width_mm and width and abs(width - spec.width_mm) > 20:
+        notes.append(f"ширина {width} мм вместо {spec.width_mm} мм")
+
+    if spec.fuel_type:
+        want_fuel = spec.fuel_type.strip().lower()
+        have_fuel = _product_fuels(product)
+        # Электро и индукция — одна семья (см. selector), газ им противопоставлен.
+        if have_fuel and not any(want_fuel[:5] in f for f in have_fuel):
+            gas_gap = ("газ" in want_fuel) != any("газ" in f for f in have_fuel)
+            if gas_gap:
+                notes.append(f"{', '.join(sorted(have_fuel))} вместо «{spec.fuel_type}»")
+
+    if spec.install_type:
+        want_inst = spec.install_type.strip().lower()[:6]
+        have_inst = _product_install(product)
+        if have_inst and want_inst not in have_inst.lower():
+            notes.append(f"установка «{have_inst}» вместо «{spec.install_type}»")
+
+    if not notes:
+        return ""
+    return "Ближайший вариант бренда: " + "; ".join(notes)
 
 
 def _spec_category(spec: ProductSpec) -> str:
@@ -316,16 +383,9 @@ def build_brand_kit(
             chosen = pick(spec, ranked, group)
             miss = (f"У бренда {brand} нет позиции"
                     + (" в этой цветовой гамме" if group else "") + " под этот пункт")
-            # Честная пометка о превышении бюджета клиента: у бренда не нашлось
-            # варианта в потолке цены — замену показываем, но НЕ молча (e2e-прогон
-            # поймал духовку за 40 990 на запрос «до 30000» без предупреждения).
-            reason = ""
-            if chosen and spec.max_price and (chosen.price or 0) > spec.max_price:
-                reason = (f"Дороже бюджета (до {spec.max_price:,} ₽) — ближайший "
-                          f"вариант бренда".replace(",", " "))
             items.append(MatchedItem(
                 spec=spec, product=chosen, candidates_count=len(ranked),
-                reason=reason if chosen else miss,
+                reason=replacement_note(spec, chosen) if chosen else miss,
             ))
         return items
 
@@ -370,4 +430,14 @@ def choose_best_kit(
             kits.append(kit)
     if not kits:
         return None
-    return max(kits, key=lambda k: k.rank_key)
+    best = max(kits, key=lambda k: k.rank_key)
+    # Проигравшие бренды сохраняем при победителе — на них опирается объяснение
+    # выбора («Korting закрыл все 3 позиции, Midea только 2»), чтобы причина была
+    # фактом сравнения, а не правдоподобной формулировкой.
+    best.rivals = [
+        BrandRival(brand=k.brand, coverage=k.coverage,
+                   benefit=k.combo.discount_total,
+                   design_consistent=k.design_consistent)
+        for k in kits if k is not best
+    ]
+    return best

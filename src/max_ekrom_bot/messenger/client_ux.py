@@ -362,6 +362,71 @@ def _promo_line(combo: object) -> str:
     return f"<i>Акция: {html.escape(str(title))}{tail}</i>"
 
 
+def _why_lines(kit: object) -> list[str]:
+    """«Почему такой комплект» — из ФАКТОВ сравнения, а не общих слов.
+
+    Каждый пункт опирается на данные, посчитанные движком: проигравшие бренды
+    (`kit.rivals`) и другие акции бренда для этого же комплекта
+    (`combo.alternatives`). Если сравнивать не с чем (один бренд подошёл, у него
+    одна акция) — пункт не пишем: выдуманное обоснование хуже его отсутствия.
+    """
+    combo = kit.combo
+    out: list[str] = []
+
+    # 1. Почему этот бренд — по тому же порядку, что решает выбор:
+    #    покрытие → дизайн → выгода (BrandKit.rank_key).
+    rivals = list(getattr(kit, "rivals", None) or [])
+    if rivals:
+        best_rival = max(rivals, key=lambda r: (r.coverage, r.benefit))
+        if kit.coverage > best_rival.coverage:
+            out.append(
+                f"Бренд <b>{html.escape(kit.brand)}</b> закрыл {kit.coverage} "
+                f"{_plural_pos(kit.coverage)} — больше остальных "
+                f"(у {html.escape(best_rival.brand)} — {best_rival.coverage})."
+            )
+        elif kit.design_consistent and not best_rival.design_consistent:
+            out.append(
+                f"Бренд <b>{html.escape(kit.brand)}</b>: единственный, где позиции "
+                f"сочетаются по цвету при том же покрытии."
+            )
+        elif combo.discount_total > best_rival.benefit:
+            out.append(
+                f"Бренд <b>{html.escape(kit.brand)}</b> выгоднее: "
+                f"{_fmt_price(combo.discount_total)} против "
+                f"{_fmt_price(best_rival.benefit)} у {html.escape(best_rival.brand)}."
+            )
+        else:
+            out.append(
+                f"Бренд <b>{html.escape(kit.brand)}</b>: то же покрытие, "
+                f"но комплект дешевле."
+            )
+    elif kit.brand:
+        out.append(
+            f"Бренд <b>{html.escape(kit.brand)}</b>: только он закрыл запрошенные "
+            f"позиции из пяти брендов."
+        )
+
+    # 2. Почему эта акция — против других акций ЭТОГО бренда.
+    alts = list(getattr(combo, "alternatives", None) or [])
+    if combo.applied and combo.campaign_title:
+        name = html.escape(combo.campaign_title)
+        if alts:
+            rival_name, rival_benefit = max(alts, key=lambda a: a[1])
+            out.append(
+                f"Акция «{name}» — выгоднее других: {_fmt_price(combo.discount_total)} "
+                f"против {_fmt_price(rival_benefit)} по «{html.escape(rival_name)}»."
+            )
+        else:
+            out.append(f"Акция «{name}» — единственная подходящая для этого набора.")
+    elif combo.manager_review:
+        out.append("Точную выгоду по акции подтвердит менеджер — "
+                   "автоматически её считать нельзя.")
+    elif not combo.applied and kit.brand:
+        out.append("Действующих комплектных акций у бренда нет — цена по прайсу.")
+
+    return out
+
+
 def format_kit(kit: object, settings: Settings) -> str:
     """Клиентское превью собранного комплекта: бренд, позиции, выгода, дизайн."""
     shop = html.escape(settings.shop_name)
@@ -408,6 +473,14 @@ def format_kit(kit: object, settings: Settings) -> str:
     if kit.design_note:
         lines.append("")
         lines.append(f"🎨 {html.escape(kit.design_note)}")
+
+    # Почему именно этот бренд и эта акция — на фактах сравнения (см. _why_lines).
+    why = _why_lines(kit)
+    if why:
+        lines.append("")
+        lines.append("🤔 <b>Почему такой комплект</b>")
+        for w in why:
+            lines.append(f"• {w}")
 
     # Позиции вне охвата бота (мойки/смесители/чужие бренды) — подберёт менеджер.
     manager_specs = getattr(kit, "manager_specs", None) or []
