@@ -232,14 +232,17 @@ def test_gift_valuer_sum_below_threshold_none():
 
 
 def test_gift_valuer_count_requires_oven():
+    # В комплекте НЕТ посудомойки — подарочная ПММ ничего не дублирует
+    # (иначе сработало бы правило «подарок не повторяет купленную категорию»).
     valuer = make_gift_valuer(_lookup)
     gift = {"condition": "count", "options": {4: "MID45"}}
     camp = _Camp("gift", requires_oven=True, gift=gift, slug="midea_pmm")
-    four = [_oven(40000), _cooktop(20000), _hood(15000), ComboItem("ПММ", 30000, "dishwasher")]
+    four = [_oven(40000), _cooktop(20000), _hood(15000),
+            ComboItem("Морозильник", 30000, "freezer")]
     r = compute_combo(four, camp, gift_value=valuer)
     assert r.applied and r.discount_total == 27990.0
     # Тот же набор без духовки — подарок не даётся.
-    no_oven = [_cooktop(20000), _hood(15000), ComboItem("ПММ", 30000, "dishwasher"),
+    no_oven = [_cooktop(20000), _hood(15000), ComboItem("Морозильник", 30000, "freezer"),
                ComboItem("СВЧ", 12000, "microwave")]
     r2 = compute_combo(no_oven, camp, gift_value=valuer)
     assert r2.applied is False and r2.manager_review is True
@@ -545,22 +548,115 @@ def test_gift_zeroing_ok_when_paid_items_meet_threshold():
     assert r.applied is True and r.item_discounts == {4: 100.0}
 
 
-def test_gift_ladder_zeroing_uses_lower_tier_of_paid_items():
-    # Лестница Формулы выгоды: обнулили вытяжку (порог 2) — оплаченных 2, и
-    # подарок порога 2 это ровно вытяжка → обнуление законно.
-    ladder = {"condition": "count",
-              "options": {2: "KHI 6393", 3: "OKB 3810", 4: "KDI 45140"}}
-    camp = _Camp("gift", gift=ladder, slug="formula")
-    items = [_oven(40000), _cooktop(25000),
-             ComboItem("Кухонная вытяжка Korting KHI 6393 N", 13120, "hood")]
+_LADDER = {"condition": "count",
+           "options": {2: "KHI 6393", 3: "OKB 3810", 4: "KDI 45140"}}
 
-    def lookup(m):
-        return {"KHI 6393": ("Кухонная вытяжка Korting KHI 6393 N", 13120),
-                "OKB 3810": ("Духовой шкаф Korting OKB 3810 FGN", 40990)}.get(m)
 
-    r = compute_combo(items, camp, gift_value=make_gift_valuer(lookup))
-    # По ВСЕМ позициям порог 3 → духовой; но духовой не в комплекте → он идёт
-    # СВЕРХУ бесплатно (все 3 позиции оплачены — условие выполнено честно).
+def _ladder_lookup(m):
+    return {"KHI 6393": ("Кухонная вытяжка Korting KHI 6393 N", 13120),
+            "OKB 3810": ("Духовой шкаф Korting OKB 3810 FGN", 40990),
+            "KDI 45140": ("Посудомоечная машина Korting KDI 45140", 42490)}.get(m)
+
+
+def test_gift_ladder_gives_top_tier_when_no_duplication():
+    # Лестница «Формулы выгоды»: в комплекте нет духового шкафа, поэтому подарок
+    # порога 3 (духовой) идёт СВЕРХУ бесплатно — сумма не меняется.
+    camp = _Camp("gift", gift=_LADDER, slug="formula")
+    items = [_cooktop(25000),
+             ComboItem("Кухонная вытяжка Korting KHI 6393 N", 13120, "hood"),
+             ComboItem("Посудомоечная машина Korting KDI 45140", 42490, "dishwasher")]
+    r = compute_combo(items, camp, gift_value=make_gift_valuer(_ladder_lookup))
     assert r.applied is True
     assert r.gift_title == "Духовой шкаф Korting OKB 3810 FGN"
     assert r.final_total == r.subtotal      # подарок сверху, сумма не меняется
+
+
+def test_gift_ladder_steps_down_to_non_duplicate_tier():
+    # Верхний достижимый порог дарит духовой шкаф, а он в комплекте уже есть →
+    # спускаемся на порог ниже и отдаём вытяжку, которой у клиента нет.
+    camp = _Camp("gift", gift=_LADDER, slug="formula")
+    items = [_oven(40000), _cooktop(25000),
+             ComboItem("Посудомоечная машина Korting KDI 45140", 42490, "dishwasher")]
+    r = compute_combo(items, camp, gift_value=make_gift_valuer(_ladder_lookup))
+    assert r.applied is True
+    assert r.gift_title == "Кухонная вытяжка Korting KHI 6393 N"
+    assert r.discount_total == 13120.0
+
+
+def test_gift_ladder_gives_nothing_when_all_tiers_duplicate():
+    # Духовой и вытяжка уже куплены (вытяжка ДРУГОЙ модели, не подарочной),
+    # ПММ порога 4 недостижима → дарить нечего, итог уточняет менеджер.
+    camp = _Camp("gift", gift=_LADDER, slug="formula")
+    items = [_oven(40000), _cooktop(25000),
+             ComboItem("Кухонная вытяжка Korting KHC 65070 GN", 23490, "hood")]
+    r = compute_combo(items, camp, gift_value=make_gift_valuer(_ladder_lookup))
+    assert r.applied is False
+    assert r.manager_review is True
+
+
+def test_gift_model_already_in_kit_is_zeroed_not_rejected():
+    # Подарочная модель — ровно тот товар, что клиент берёт: это не «дубль», а
+    # обнуление позиции. Правило про дублирование сюда не лезет.
+    camp = _Camp("gift", gift=_LADDER, slug="formula")
+    items = [_oven(40000), _cooktop(25000),
+             ComboItem("Кухонная вытяжка Korting KHI 6393 N", 13120, "hood")]
+    r = compute_combo(items, camp, gift_value=make_gift_valuer(_ladder_lookup))
+    assert r.applied is True
+    assert r.item_discounts == {2: 100.0}
+    assert r.final_total == r.subtotal - 13120
+
+
+# ── Подарок не должен дублировать уже купленную категорию ────────────────────
+
+def test_gift_duplicating_bought_category_is_not_counted():
+    """Живой случай: комплект Midea с ПММ MID60S340i + «в подарок» ПММ MID45S100i.
+
+    Вторая посудомойка клиенту не нужна, а её цена (24 990 ₽) раздувала выгоду
+    и уводила выбор бренда. Подарок сверху той же категории не засчитываем.
+    """
+    camp = _Camp("gift", gift={"condition": "count", "options": {2: "MID45S100I"}},
+                 slug="midea_pmm")
+    items = [
+        _oven(40990),
+        ComboItem("Встраиваемая посудомоечная машина Midea MID60S340i", 42990,
+                  "dishwasher"),
+    ]
+    valuer = make_gift_valuer(
+        lambda m: ("Встраиваемая посудомоечная машина Midea MID45S100i", 24990))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is False
+    assert r.discount_total == 0.0
+    assert r.manager_review is True
+
+
+def test_gift_of_new_category_still_counted():
+    # Контроль: подарок ДРУГОЙ категории по-прежнему засчитывается.
+    camp = _Camp("gift", gift={"condition": "count", "options": {2: "KWK 0902"}},
+                 slug="korting_mbt")
+    items = [_oven(40990), _cooktop(25000)]
+    valuer = make_gift_valuer(lambda m: ("Чайник Korting KWK 0902 G", 3990))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is True and r.discount_total == 3990.0
+
+
+def test_gift_inside_kit_is_allowed_to_repeat_category():
+    # Подарочная модель САМА стоит в комплекте — это обнуление позиции, а не
+    # вторая машина: дублирование категории здесь законно.
+    camp = _Camp("gift", gift={"condition": "count", "options": {2: "MID45"}},
+                 slug="midea_pmm")
+    items = [_oven(40000), _cooktop(20000),
+             ComboItem("Посудомоечная машина Midea MID45S100i", 27990, "dishwasher")]
+    valuer = make_gift_valuer(lambda m: ("Посудомоечная машина Midea MID45S100i", 27990))
+    r = compute_combo(items, camp, gift_value=valuer)
+    assert r.applied is True and r.item_discounts == {2: 100.0}
+
+
+def test_category_of_title():
+    from max_ekrom_bot.matching.combo_pricing import category_of_title
+
+    assert category_of_title("Встраиваемая посудомоечная машина Midea MID45S100i") == "dishwasher"
+    assert category_of_title("Микроволновая печь встраиваемая Midea MI92200GB") == "microwave"
+    assert category_of_title("Электрический духовой шкаф Korting OKB 3810") == "oven"
+    assert category_of_title("Индукционная варочная панель Lex EVI 640") == "cooktop"
+    assert category_of_title("Кухонная вытяжка Korting KHI 6393 N") == "hood"
+    assert category_of_title("Чайник Korting KWK 0902 G") is None

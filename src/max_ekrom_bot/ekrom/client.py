@@ -497,6 +497,23 @@ class EkromClient:
         except Exception:  # noqa: BLE001 — обогащение не критично для потока
             pass
 
+    async def image_alive(self, url: str) -> bool:
+        """Отвечает ли ссылка на фото картинкой (а не страницей 404).
+
+        Bitrix перегенерирует пути в /upload/iblock/, и сохранённый в кэше URL со
+        временем начинает отдавать 404-страницу. В PDF это выглядело как пустое
+        место вместо фото. Проверяем дёшево — HEAD через контекст браузера (куки
+        сессии подхватываются). Любая осечка считается «ссылка мертва»: лучше
+        лишний раз перечитать карточку, чем отдать клиенту документ без фото.
+        """
+        if not url or self._context is None:
+            return False
+        try:
+            resp = await self._context.request.head(url, timeout=8000)
+        except Exception:  # noqa: BLE001 — сеть/таймаут → считаем мёртвой
+            return False
+        return resp.status == 200 and "image" in (resp.headers.get("content-type") or "")
+
     # ── Корзина ────────────────────────────────────────────────────────────────
     async def add_to_cart(self, product: CatalogProduct, page: Page | None = None) -> bool:
         """Открыть страницу товара и нажать кнопку «Добавить/В корзину».

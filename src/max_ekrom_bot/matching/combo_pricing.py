@@ -76,6 +76,33 @@ class ComboResult:
 _MANAGER_REVIEW = {"gift", "spec_price", "unknown", "showcase"}
 
 
+# Категория прибора по названию — для проверки «подарок дублирует покупку».
+# Ключи совпадают со значениями ApplianceType, которыми заполняется
+# ComboItem.category, поэтому сравнение прямое.
+_CATEGORY_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("dishwasher", ("посудомоечн", "посудомой")),
+    ("microwave", ("микроволнов", "свч")),
+    ("oven", ("духово", "духовк")),
+    ("cooktop", ("варочн",)),
+    ("hood", ("вытяжк",)),
+    ("fridge", ("холодильник",)),
+)
+
+
+def category_of_title(title: str) -> str | None:
+    """Категория прибора по названию товара («…посудомоечная машина…» → dishwasher).
+
+    Порядок проверок важен: «встраиваемая посудомоечная машина» не должна
+    попасть в oven из-за слова «встраиваемая», а СВЧ проверяем до духового
+    шкафа — у комби-моделей в названии есть оба слова.
+    """
+    low = (title or "").lower()
+    for key, words in _CATEGORY_WORDS:
+        if any(w in low for w in words):
+            return key
+    return None
+
+
 def _matches_model(item: ComboItem, models: list[str]) -> bool:
     """Совпадает ли позиция с одной из моделей правила (по подстроке названия)."""
     low = (item.title or "").lower()
@@ -417,11 +444,27 @@ def make_gift_valuer(catalog_lookup: object):
         eligible = [thr for thr in opts if metric >= thr]
         if not eligible:
             return None
-        model = opts[max(eligible)]
-        found = catalog_lookup(model)
-        if not found or not found[1]:
-            return None
-        return found[0], float(found[1]), model
+        # Идём от максимального достижимого порога ВНИЗ: если подарок верхнего
+        # порога дублирует уже купленную категорию, пробуем следующий — лучше
+        # отдать клиенту меньший, но нужный прибор, чем ничего.
+        for thr in sorted(eligible, reverse=True):
+            model = opts[thr]
+            found = catalog_lookup(model)
+            if not found or not found[1]:
+                continue
+            title = found[0]
+            # Подарок СВЕРХУ не должен дублировать категорию, которую клиент и
+            # так покупает: «в подарок посудомойка» к уже выбранной посудомойке —
+            # вторая ненужная машина, а её цена раздувала выгоду и уводила выбор
+            # бренда. Если подарочная модель САМА стоит в комплекте — это другой
+            # случай (позиция обнуляется), он разрешён.
+            in_kit = any(model.lower() in (i.title or "").lower() for i in items)
+            if not in_kit:
+                gift_cat = category_of_title(title)
+                if gift_cat and any(i.category == gift_cat for i in items):
+                    continue
+            return title, float(found[1]), model
+        return None
 
     return valuer
 

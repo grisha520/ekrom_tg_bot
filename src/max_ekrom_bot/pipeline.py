@@ -387,6 +387,13 @@ class Pipeline:
                 page = await ekrom.new_page()
                 try:
                     await ekrom.ensure_enriched(product, page, with_image=True)
+                    # Ссылка из кэша могла протухнуть: Bitrix перегенерирует пути
+                    # в /upload/iblock/, и старый URL отдаёт 404-страницу — в PDF
+                    # это пустое место вместо фото. Проверяем и перечитываем
+                    # карточку (ensure_enriched с пустым image_url сходит на неё).
+                    if product.image_url and not await ekrom.image_alive(product.image_url):
+                        product.image_url = None
+                        await ekrom.ensure_enriched(product, page, with_image=True)
                     if cache is not None:
                         cache.update_enrichment(
                             product.url, product.attributes, product.image_url
