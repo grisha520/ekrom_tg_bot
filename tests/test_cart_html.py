@@ -305,3 +305,19 @@ def test_warranty_icon_is_original_from_site():
 
     html = build_cart_html(_sel(), _S, None)
     assert "ic-warranty" in html and "Срок гарантии" in html
+
+
+def test_service_icons_are_original_vectors_from_reference():
+    # Иконки сервис-блока и пины — векторы, извлечённые из эталонного PDF сайта,
+    # а не самодельные эскизы. Проверяем, что файлы на месте и попадают в документ.
+    from max_ekrom_bot.pdf.cart_html import _ASSETS, _IC
+
+    for name in ("truck", "box", "list", "pin"):
+        assert (_ASSETS / f"icon_{name}.svg").exists(), f"нет иконки {name}"
+        svg = _IC[name]()
+        assert svg.startswith("<svg") and "path" in svg
+        assert "pt" in svg.split(">")[0]          # высота задана в печатных единицах
+
+    html = build_cart_html(_sel(), _S, None)
+    # фирменный цвет иконок документа
+    assert "#0a4250" in html

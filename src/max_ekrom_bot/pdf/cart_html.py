@@ -1,10 +1,14 @@
 """PDF-комплект «точь-в-точь» как корзина ekrom — через HTML+CSS → Chromium.
 
 Оригинал `cart_pdf.php` сайт рендерит из HTML браузерным движком, поэтому reportlab
-не даёт пиксельной идентичности. Здесь мы верстаем ТУ ЖЕ разметку (шрифт Rubik,
-логотип EKROM, тёмная шапка, карточки товаров, блок «Итого», карточка менеджера,
-шоурумы, водяной знак) и рендерим уже встроенным Playwright/Chromium (`page.pdf`),
-подставляя НАШИ данные и посчитанную комплектную скидку (которой нет в корзине сайта).
+не даёт пиксельной идентичности. Здесь мы верстаем ТУ ЖЕ разметку и рендерим уже
+встроенным Playwright/Chromium (`page.pdf`), подставляя НАШИ данные и посчитанную
+комплектную скидку (которой нет в корзине сайта).
+
+Оформление взято у эталона, а не нарисовано «на глаз»: фирменный шрифт
+PPPangramSans и все иконки — оригиналы (шрифт скачан с сайта, иконки извлечены из
+эталонного PDF), кегли и координаты колонок выставлены по метрикам, снятым из того
+же файла (расхождение ≤ 0.4pt).
 
 Точка входа: `build_cart_html(selection, settings, combo)` → HTML (чистая, тестируемая);
 `render_html_pdf(html, out_path)` — async-рендер. Итог собирает `Pipeline.build_kit_pdf`.
@@ -107,22 +111,33 @@ _FLAGS = {
 
 
 # ── Иконки ────────────────────────────────────────────────────────────────────
-# «Срок гарантии» — ОРИГИНАЛЬНАЯ иконка документа сайта: извлечена из эталонного
-# PDF (изображение + маска прозрачности, фирменный цвет #004667). Нарисованный
-# от руки SVG заметно отличался от эталона.
+# ВСЕ иконки — оригиналы из документа сайта, а не нарисованные от руки: «Срок
+# гарантии» вынута из эталонного PDF как растр (изображение + маска
+# прозрачности), остальные там векторные — их пути извлечены из content stream
+# и сохранены в assets как SVG. Свои эскизы заметно отличались от эталона.
 def _warranty_icon() -> str:
     uri = _asset_data_uri("icon_warranty.png")
-    if not uri:
+    return f'<img class="ic-warranty" src="{uri}" alt="">' if uri else ""
+
+
+@lru_cache(maxsize=8)
+def _icon_svg(name: str, height_pt: float) -> str:
+    """SVG-иконка из assets, вписанная в заданную высоту (pt)."""
+    try:
+        svg = (_ASSETS / f"icon_{name}.svg").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — без файла блок просто останется без значка
         return ""
-    return f'<img class="ic-warranty" src="{uri}" alt="">'
+    # Свои width/height заменяем на печатные, пропорции держит viewBox.
+    svg = re.sub(r'\swidth="[^"]*"', "", svg, count=1)
+    svg = re.sub(r'\sheight="[^"]*"', "", svg, count=1)
+    return svg.replace("<svg ", f'<svg height="{height_pt}pt" ', 1)
 
 
 _IC = {
-    "hammer": "",  # заполняется в _card() из _warranty_icon()
-    "truck": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.5"><rect x="2" y="6" width="14" height="11"/><path d="M16 9h4l4 4v4h-8z"/><circle cx="8" cy="19" r="2"/><circle cx="20" cy="19" r="2"/></svg>',
-    "box": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.5"><path d="M4 9l10-5 10 5v10l-10 5-10-5z"/><path d="M4 9l10 5 10-5M14 14v10"/></svg>',
-    "list": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.5"><rect x="6" y="3" width="16" height="22" rx="2"/><path d="M10 9h8M10 14h8M10 19h5"/></svg>',
-    "pin": '<svg viewBox="0 0 24 24" width="12" height="12" fill="#3b6fd4"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7zm0 9.5A2.5 2.5 0 1112 6a2.5 2.5 0 010 5z"/></svg>',
+    "truck": lambda: _icon_svg("truck", 13),
+    "box": lambda: _icon_svg("box", 13),
+    "list": lambda: _icon_svg("list", 13),
+    "pin": lambda: _icon_svg("pin", 5.5),
 }
 
 # Что и в каком порядке показывать в «Характеристиках» — сверено с документом
@@ -284,7 +299,7 @@ def _total_block(selection: SelectionResult, settings, combo) -> str:
     matched_rooms = [lst for city, lst in SHOWROOMS if city.lower() == doc_city]
     city_rooms = matched_rooms[0] if matched_rooms else SHOWROOMS[0][1]
     rooms = "".join(
-        f'<div class="room">{_IC["pin"]}<span>{_esc(r.split(" · ")[0])}</span></div>'
+        f'<div class="room">{_IC["pin"]()}<span>{_esc(r.split(" · ")[0])}</span></div>'
         for r in city_rooms
     )
     mgr_name = _esc(settings.manager_name or "Менеджер")
@@ -305,11 +320,11 @@ def _total_block(selection: SelectionResult, settings, combo) -> str:
       {disc_row}{gift_row}
       <div class="trow final"><span>Сумма со скидкой</span><span class="tval big">{_fmt(final)}</span></div>
       <div class="total__note">Предложение актуально на момент формирования {datetime.now():%d.%m.%Y}</div>
-      <div class="serv"><div class="serv__ic">{_IC['truck']}</div>
+      <div class="serv"><div class="serv__ic">{_IC['truck']()}</div>
         <div>Можно оформить <b>доставку</b> этого комплекта до дома с <b>подъемом</b> до квартиры</div></div>
-      <div class="serv"><div class="serv__ic">{_IC['box']}</div>
+      <div class="serv"><div class="serv__ic">{_IC['box']()}</div>
         <div>Можно <b>хранить</b> товар на складе до монтажа <b>бесплатно</b> в течение 90 календарных дней</div></div>
-      <div class="serv"><div class="serv__ic">{_IC['list']}</div>
+      <div class="serv"><div class="serv__ic">{_IC['list']()}</div>
         <div>Можно технику посмотреть в {len(city_rooms)}-х шоурумах. А также в режиме <b>онлайн</b> с помощью менеджера</div></div>
       {mgr}
     </div>
