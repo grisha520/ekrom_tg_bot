@@ -36,6 +36,16 @@ _FONT_FACES: tuple[tuple[str, int], ...] = (
 )
 
 
+@lru_cache(maxsize=8)
+def _asset_data_uri(filename: str, mime: str = "image/png") -> str:
+    """Файл из assets как data:URI (документ остаётся самодостаточным)."""
+    try:
+        b64 = base64.b64encode((_ASSETS / filename).read_bytes()).decode("ascii")
+    except Exception:  # noqa: BLE001 — нет файла: вернём пустоту, вёрстка устоит
+        return ""
+    return f"data:{mime};base64,{b64}"
+
+
 @lru_cache(maxsize=1)
 def _font_css() -> str:
     """@font-face с зашитыми в base64 файлами шрифта (документ самодостаточен)."""
@@ -96,9 +106,19 @@ _FLAGS = {
 }
 
 
-# ── Иконки (inline SVG, близко к оригиналу) ───────────────────────────────────
+# ── Иконки ────────────────────────────────────────────────────────────────────
+# «Срок гарантии» — ОРИГИНАЛЬНАЯ иконка документа сайта: извлечена из эталонного
+# PDF (изображение + маска прозрачности, фирменный цвет #004667). Нарисованный
+# от руки SVG заметно отличался от эталона.
+def _warranty_icon() -> str:
+    uri = _asset_data_uri("icon_warranty.png")
+    if not uri:
+        return ""
+    return f'<img class="ic-warranty" src="{uri}" alt="">'
+
+
 _IC = {
-    "hammer": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 7l5 5M4 24l8-8M15 4l9 9-3 3-9-9zM11 15l-1 4 4-1"/></svg>',
+    "hammer": "",  # заполняется в _card() из _warranty_icon()
     "truck": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.5"><rect x="2" y="6" width="14" height="11"/><path d="M16 9h4l4 4v4h-8z"/><circle cx="8" cy="19" r="2"/><circle cx="20" cy="19" r="2"/></svg>',
     "box": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.5"><path d="M4 9l10-5 10 5v10l-10 5-10-5z"/><path d="M4 9l10 5 10-5M14 14v10"/></svg>',
     "list": '<svg viewBox="0 0 28 28" width="28" height="28" fill="none" stroke="#12232c" stroke-width="1.5"><rect x="6" y="3" width="16" height="22" rx="2"/><path d="M10 9h8M10 14h8M10 19h5"/></svg>',
@@ -234,7 +254,7 @@ def _card(item) -> str:
           <a href="{doc_href}">Инструкция</a><a href="{doc_href}">Схема</a></div>
         <div class="meta"><div class="meta__ic">{_flag(country)}</div>
           <div><div class="meta__t">Страна<br>производства</div><b>{_esc(country)}</b></div></div>
-        <div class="meta"><div class="meta__ic">{_IC['hammer']}</div>
+        <div class="meta"><div class="meta__ic">{_warranty_icon()}</div>
           <div><div class="meta__t">Срок гарантии</div><b>{_esc(warranty)}</b></div></div>
       </div>
     </div>"""
@@ -353,6 +373,7 @@ body{{font-family:'PangramSans','Rubik',sans-serif;color:#12232c;font-size:9pt;f
 .dl a:first-of-type{{width:104pt}}
 .meta{{display:flex;align-items:center;gap:9pt}}
 .meta__ic{{width:24pt;text-align:center}}
+.ic-warranty{{width:19pt;height:19pt;display:inline-block;vertical-align:middle}}
 .flag svg{{vertical-align:middle}}
 .flag--none{{display:inline-block;width:16pt;height:16pt;border-radius:50%;background:#e6e6e6}}
 .meta__t{{color:#8a8a8a;font-size:9pt;line-height:1.2}}

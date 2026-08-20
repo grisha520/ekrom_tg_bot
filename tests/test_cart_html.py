@@ -292,3 +292,16 @@ def test_warranty_fractional_rounds_like_site():
 def test_city_badge_in_manager_card():
     html = build_cart_html(_sel(), _S, None)
     assert "city-badge" in html and _S.pdf_city in html
+
+
+def test_warranty_icon_is_original_from_site():
+    # Иконка «Срок гарантии» — оригинал из документа сайта (извлечён из эталонного
+    # PDF), а не нарисованный от руки SVG: он заметно отличался от эталона.
+    from max_ekrom_bot.pdf.cart_html import _ASSETS, _warranty_icon
+
+    assert (_ASSETS / "icon_warranty.png").exists()
+    icon = _warranty_icon()
+    assert icon.startswith("<img") and "data:image/png;base64," in icon
+
+    html = build_cart_html(_sel(), _S, None)
+    assert "ic-warranty" in html and "Срок гарантии" in html
