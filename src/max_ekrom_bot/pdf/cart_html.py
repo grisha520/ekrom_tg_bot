@@ -12,14 +12,45 @@
 
 from __future__ import annotations
 
+import base64
 import html as _html
+import re
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 from ..models import SelectionResult
 from ..showrooms import SHOWROOMS
 
 _ASSETS = Path(__file__).parent / "assets"
+
+
+# Фирменный шрифт документа корзины. Сайт печатает PDF шрифтом PPPangramSans
+# (на вебе он использует Rubik — это разные шаблоны), поэтому наш документ обязан
+# использовать именно его, иначе набор отличается на глаз при любой вёрстке.
+# Файлы скачаны с ekrom.ru/local/templates/ekrom/fonts/ и лежат в assets/.
+_FONT_FACES: tuple[tuple[str, int], ...] = (
+    ("PPPangramSans-Light", 300),
+    ("PPPangramSans-Medium", 500),
+    ("PPPangramSans-Semibold", 600),
+)
+
+
+@lru_cache(maxsize=1)
+def _font_css() -> str:
+    """@font-face с зашитыми в base64 файлами шрифта (документ самодостаточен)."""
+    faces = []
+    for name, weight in _FONT_FACES:
+        path = _ASSETS / f"{name}.otf"
+        try:
+            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        except Exception:  # noqa: BLE001 — без файла останется системный запасной
+            continue
+        faces.append(
+            f"@font-face{{font-family:'PangramSans';font-style:normal;"
+            f"font-weight:{weight};src:url(data:font/otf;base64,{b64}) format('opentype');}}"
+        )
+    return "".join(faces)
 
 
 def _logo_svg() -> str:
@@ -96,13 +127,17 @@ _MAX_ATTRS = 11
 
 
 def _warranty_months(value: str | None) -> str:
-    """«24» → «24 месяца» (форма слова по числу, как в документе сайта)."""
+    """«24» → «24 месяца» (форма слова по числу, как в документе сайта).
+
+    Дробные значения каталога («36,6») округляем, как это делает сайт: 36,6 → 37.
+    Раньше отбрасывалась запятая и получалось «366 месяцев».
+    """
     if not value or not value.strip("-"):
         return "-"
-    digits = "".join(ch for ch in value if ch.isdigit())
-    if not digits:
+    m = re.search(r"\d+(?:[.,]\d+)?", value)
+    if not m:
         return _html.escape(value)
-    n = int(digits)
+    n = int(round(float(m.group().replace(",", "."))))
     tail = n % 100
     if 11 <= tail <= 14:
         word = "месяцев"
@@ -241,7 +276,7 @@ def _total_block(selection: SelectionResult, settings, combo) -> str:
             <div class="mgr__row"><span>Телефон:</span> {_esc(settings.manager_phone)}</div>
             <div class="mgr__row"><span>Городской телефон:</span> {_esc(settings.manager_city_phone)}</div>
           </div></div>
-        <div class="mgr__r">{rooms}</div>
+        <div class="mgr__r"><span class="city-badge">{_esc(settings.pdf_city)}</span>{rooms}</div>
       </div>"""
     return f"""
     <div class="total">
@@ -269,70 +304,85 @@ def build_cart_html(selection: SelectionResult, settings, combo=None) -> str:
     stamp = f"{datetime.now():%d.%m.%Y %H:%M}"
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap');
+{_font_css()}
 *{{margin:0;padding:0;box-sizing:border-box}}
 @page{{size:A4;margin:0}}
-body{{font-family:'Rubik',sans-serif;color:#12232c;font-size:11px;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-.top{{background:#13232c;height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 34px;margin-bottom:16px}}
-.logo-svg{{height:20px;width:auto;fill:#fff}}
-.phone{{color:#fff;font-size:15px;font-weight:500;text-decoration:underline;text-underline-offset:3px}}
-.wrap{{padding:0 34px}}
-.subtitle{{color:#8a8a8a;font-size:10.5px;margin-bottom:18px}}
+/* Кегли и координаты выставлены по МЕТРИКАМ эталонного файла сайта (извлечены из
+   PDF: поле слева 15pt, заголовок товара 15pt, «Характеристики» 10.5pt, строки
+   9pt, цена 13.5pt, ссылки 8.2pt, подзаголовок 7.5pt), поэтому размеры в pt. */
+body{{font-family:'PangramSans','Rubik',sans-serif;color:#12232c;font-size:9pt;font-weight:500;
+  -webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.top{{background:#13232c;height:47pt;display:flex;align-items:center;justify-content:space-between;padding:0 15pt;margin-bottom:12pt}}
+.logo-svg{{height:15pt;width:auto;fill:#fff}}
+.phone{{color:#fff;font-size:13.5pt;font-weight:600;text-decoration:underline;text-underline-offset:3px}}
+.wrap{{padding:0 15pt}}
+.subtitle{{color:#8a8a8a;font-size:7.5pt;margin-bottom:14pt}}
 /* Карточка и блок «Итого» не разрываются между страницами: в документе сайта
    товар всегда целиком на одной странице, а у нас цена уезжала на предыдущую,
    футер — на следующую. */
 .card{{border-bottom:1px solid #e6e6e6;padding-bottom:16px;margin-bottom:16px;
   page-break-inside:avoid;break-inside:avoid}}
 .total{{page-break-inside:avoid;break-inside:avoid}}
-.card__title{{font-weight:700;font-size:16px;letter-spacing:.2px;margin-bottom:14px}}
-.card__body{{display:flex;gap:22px}}
-.ph{{width:200px;height:200px;border:1px solid #e6e6e6;border-radius:18px;flex:none;display:flex;align-items:center;justify-content:center;overflow:hidden}}
+.card__title{{font-weight:600;font-size:15pt;line-height:1.5;letter-spacing:0;margin-bottom:11pt}}
+.card__body{{display:flex;gap:28pt}}
+/* Сетка эталона: фото 15…~185pt, характеристики с 203pt, цена справа до 580pt. */
+.ph{{width:160pt;height:160pt;border:1px solid #e6e6e6;border-radius:14pt;flex:none;display:flex;align-items:center;justify-content:center;overflow:hidden}}
 .ph img{{max-width:88%;max-height:88%;object-fit:contain}}
 .chars{{flex:1}}
-.chars__h{{font-weight:600;font-size:14px;margin-bottom:8px}}
+.chars__h{{font-weight:600;font-size:10.5pt;margin-bottom:6pt}}
 .chars table{{width:100%;border-collapse:collapse}}
-.chars td{{padding:3px 0;font-size:11.5px;vertical-align:top}}
-.chars .k{{color:#8a8a8a;width:52%}}
+.chars td{{padding:2.4pt 0;font-size:9pt;vertical-align:top;line-height:1.15}}
+.chars .k{{color:#8a8a8a;width:52%;padding-right:8pt}}
 .chars .v{{color:#12232c}}
-.price{{width:170px;flex:none;display:flex;align-items:flex-start;justify-content:flex-end;gap:14px;padding-top:64px}}
-.price .qty{{color:#12232c;font-size:12px;padding-top:4px}}
+/* Цена в эталоне стоит по ЦЕНТРУ блока характеристик (проверено по координатам
+   обоих товаров), а не на фиксированном отступе сверху. */
+.price{{width:104pt;flex:none;display:flex;align-items:center;justify-content:flex-end;gap:8pt}}
+.price .qty{{color:#12232c;font-size:9pt;font-weight:600;padding-top:3pt;white-space:nowrap}}
 .pv{{text-align:right}}
-.disc{{color:#e30613;font-weight:600;font-size:11px}}
-.old{{color:#8a8a8a;text-decoration:line-through;font-size:11px}}
-.sum{{font-weight:700;font-size:19px;white-space:nowrap}}
-.card__foot{{display:flex;gap:38px;margin-top:16px;align-items:center}}
-.dl{{width:200px}}
-.dl__t{{font-size:11px;margin-bottom:8px}}
-.dl a{{color:#12232c;text-decoration:underline;text-underline-offset:3px;margin-right:36px;font-size:11.5px}}
-.meta{{display:flex;align-items:center;gap:12px}}
-.meta__ic{{width:32px;text-align:center}}
+.disc{{color:#e30613;font-weight:600;font-size:8.5pt}}
+.old{{color:#8a8a8a;text-decoration:line-through;font-size:8.5pt}}
+.sum{{font-weight:600;font-size:13.5pt;white-space:nowrap}}
+/* Футер карточки по эталону: «Страна производства» с 190pt, «Срок гарантии» с 336pt. */
+.card__foot{{display:flex;gap:0;margin-top:12pt;align-items:center}}
+.dl{{width:142pt}}
+.card__foot .meta{{width:146pt}}
+.dl__t{{font-size:9pt;margin-bottom:6pt;padding-left:19pt}}
+/* Шаг между ссылками — по эталону: «Инструкция» с 15pt, «Схема» со 118.9pt. */
+.dl a{{color:#12232c;text-decoration:underline;text-underline-offset:3px;font-size:8.2pt;font-weight:600;
+  display:inline-block;white-space:nowrap}}
+.dl a:first-of-type{{width:104pt}}
+.meta{{display:flex;align-items:center;gap:9pt}}
+.meta__ic{{width:24pt;text-align:center}}
 .flag svg{{vertical-align:middle}}
-.flag--none{{display:inline-block;width:22px;height:22px;border-radius:50%;background:#e6e6e6}}
-.meta__t{{color:#8a8a8a;font-size:10.5px;line-height:1.15}}
-.meta b{{font-size:12px}}
-.total{{padding:14px 34px 0}}
-.total__h{{text-align:center;font-weight:600;font-size:15px;padding-bottom:12px;border-bottom:1px solid #e6e6e6;margin-bottom:6px}}
-.trow{{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #f0f0f0;font-size:13px}}
+.flag--none{{display:inline-block;width:16pt;height:16pt;border-radius:50%;background:#e6e6e6}}
+.meta__t{{color:#8a8a8a;font-size:9pt;line-height:1.2}}
+.meta b{{font-size:9pt;font-weight:600}}
+.total{{padding:10pt 15pt 0}}
+.total__h{{text-align:center;font-weight:600;font-size:10.5pt;padding-bottom:9pt;border-bottom:1px solid #e6e6e6;margin-bottom:4pt}}
+.trow{{display:flex;justify-content:space-between;align-items:center;padding:7pt 0;border-bottom:1px solid #f0f0f0;font-size:10.5pt}}
 .trow .tval{{font-weight:600}}
 .trow .muted{{color:#8a8a8a}}
 .trow .red{{color:#e30613}}
-.badge{{display:inline-block;border:1px solid #e30613;border-radius:12px;color:#e30613;font-size:10px;padding:2px 8px;margin-right:10px;font-weight:500}}
-.trow.final{{border-bottom:none;padding-top:12px}}
-.trow.final span:first-child{{font-weight:600;font-size:15px}}
-.trow .big{{font-weight:700;font-size:19px}}
-.total__note{{color:#8a8a8a;font-size:10px;text-align:center;margin:4px 0 16px}}
-.serv{{display:flex;align-items:center;gap:16px;margin-bottom:12px;font-size:12px;color:#3a3a3a}}
-.serv__ic{{width:32px;flex:none;text-align:center}}
-.serv b{{color:#12232c}}
-.mgr{{display:flex;gap:20px;background:#2b3138;border-radius:14px;padding:20px;margin-top:14px;color:#c9ced3}}
-.mgr__l{{display:flex;gap:14px;width:44%}}
-.mgr__ava{{width:46px;height:46px;border-radius:50%;background:#4a5158;flex:none}}
-.mgr__name{{color:#fff;font-weight:600;margin-bottom:8px;font-size:12px}}
-.mgr__row{{font-size:10.5px;margin-bottom:3px}}
+.badge{{display:inline-block;border:1px solid #e30613;border-radius:9pt;color:#e30613;font-size:7.5pt;padding:1.5pt 6pt;margin-right:8pt;font-weight:500}}
+.trow.final{{border-bottom:none;padding-top:9pt}}
+.trow.final span:first-child{{font-weight:600;font-size:12pt}}
+.trow .big{{font-weight:600;font-size:15pt}}
+.total__note{{color:#8a8a8a;font-size:7.5pt;text-align:center;margin:3pt 0 12pt}}
+.serv{{display:flex;align-items:center;gap:12pt;margin-bottom:9pt;font-size:9.5pt;color:#3a3a3a}}
+.serv__ic{{width:24pt;flex:none;text-align:center}}
+.serv b{{color:#12232c;font-weight:600}}
+.mgr{{display:flex;gap:15pt;background:#2b3138;border-radius:11pt;padding:15pt;margin-top:11pt;color:#c9ced3}}
+.mgr__l{{display:flex;gap:11pt;width:44%}}
+.mgr__ava{{width:35pt;height:35pt;border-radius:50%;background:#4a5158;flex:none}}
+.mgr__name{{color:#fff;font-weight:600;margin-bottom:6pt;font-size:9pt}}
+.mgr__row{{font-size:7.5pt;margin-bottom:2pt}}
 .mgr__row span{{color:#8a9099}}
-.mgr__r{{flex:1;background:#333a41;border-radius:10px;padding:14px 16px}}
-.room{{display:flex;align-items:center;gap:8px;font-size:10.5px;margin-bottom:8px}}
-.watermark{{text-align:center;font-weight:700;font-size:120px;color:#f2f2f2;letter-spacing:8px;margin-top:20px;line-height:1}}
+.mgr__r{{flex:1;background:#333a41;border-radius:8pt;padding:11pt 12pt}}
+/* Бейдж города над адресами — как в эталоне корзины. */
+.city-badge{{display:inline-block;background:#1d5f74;color:#dff1f6;border-radius:4pt;
+  font-size:6.5pt;padding:1.5pt 6pt;margin-bottom:8pt}}
+.room{{display:flex;align-items:center;gap:6pt;font-size:7.5pt;margin-bottom:6pt}}
+.watermark{{text-align:center;font-weight:600;font-size:90pt;color:#f2f2f2;letter-spacing:6pt;margin-top:15pt;line-height:1}}
 </style></head><body>
 <div class="top"><span class="logo">{_logo_svg()}</span><span class="phone">{phone}</span></div>
 <div class="wrap"><div class="subtitle">Корзина от {stamp} &nbsp;(г. {city})</div>{cards}</div>

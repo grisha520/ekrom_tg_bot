@@ -28,8 +28,8 @@ def test_html_has_core_blocks():
     combo = ComboResult(mechanic="spec_price", subtotal=85514, discount_total=57281,
                         final_total=28233, applied=True)
     html = build_cart_html(_sel(), _S, combo)
-    # шапка + шрифт Rubik + логотип
-    assert "Rubik" in html and "<svg" in html and _S.pdf_header_phone in html
+    # шапка + логотип + шрифт (PangramSans как в документе сайта, Rubik — запасной)
+    assert "PangramSans" in html and "<svg" in html and _S.pdf_header_phone in html
     # товары (заголовки uppercase)
     assert "ДУХОВОЙ ШКАФ KUPPERSBERG HO 608" in html
     # блок итого в формате эталона
@@ -248,3 +248,47 @@ def test_cards_do_not_split_across_pages():
     )
     html = build_cart_html(SelectionResult(items=[item]), Settings(telegram_bot_token="x"))
     assert "break-inside:avoid" in html
+
+
+# ── Сведение с эталоном сайта: шрифт и метрики ───────────────────────────────
+
+def test_html_uses_site_brand_font_not_rubik():
+    # Документ корзины сайта набран PPPangramSans; Rubik (веб-шрифт сайта) в PDF
+    # давал другое начертание — при любой вёрстке файл выглядел «не тем».
+    html = build_cart_html(_sel(), _S, None)
+    assert "PangramSans" in html
+    assert "fonts.googleapis.com" not in html      # внешних шрифтов быть не должно
+    assert "@font-face" in html and "base64" in html  # шрифт зашит в документ
+
+
+def test_font_files_present_and_embedded():
+    from max_ekrom_bot.pdf.cart_html import _font_css, _FONT_FACES, _ASSETS
+
+    for name, _weight in _FONT_FACES:
+        assert (_ASSETS / f"{name}.otf").exists(), f"нет файла шрифта {name}"
+    assert _font_css().count("@font-face") == len(_FONT_FACES)
+
+
+def test_metrics_match_reference_points():
+    # Кегли/поля выставлены по метрикам эталонного PDF (извлечены из файла сайта).
+    html = build_cart_html(_sel(), _S, None)
+    for rule in ("font-size:15pt", "font-size:10.5pt", "font-size:9pt",
+                 "font-size:13.5pt", "font-size:8.2pt", "font-size:7.5pt"):
+        assert rule in html, f"потерян кегль эталона: {rule}"
+    assert "padding:0 15pt" in html                 # поле страницы 15pt
+
+
+def test_warranty_fractional_rounds_like_site():
+    # Каталожное «36,6» сайт печатает как «37 месяцев»; раньше выходило «366».
+    from max_ekrom_bot.pdf.cart_html import _warranty_months
+
+    assert _warranty_months("36,6") == "37 месяцев"
+    assert _warranty_months("24") == "24 месяца"
+    assert _warranty_months("12") == "12 месяцев"
+    assert _warranty_months("1") == "1 месяц"
+    assert _warranty_months("-") == "-"
+
+
+def test_city_badge_in_manager_card():
+    html = build_cart_html(_sel(), _S, None)
+    assert "city-badge" in html and _S.pdf_city in html
