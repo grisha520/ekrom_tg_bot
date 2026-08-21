@@ -76,9 +76,9 @@ def test_html_without_combo_renders_price_list():
 
 
 def test_html_country_flags_rendered():
-    # У товаров страны Турция/Китай → круглые SVG-флаги (clip-path), а не эмодзи.
+    # У товаров страны Турция/Китай → SVG-флаги (оригиналы из эталона), не эмодзи.
     html = build_cart_html(_sel(), _S, None)
-    assert "clip-path" in html
+    assert '<span class="flag">' in html and "#d70027" in html
 
 
 def test_html_zero_discount_shows_row():
