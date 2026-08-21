@@ -81,3 +81,68 @@ def test_value_matches_numeric_tolerance_and_text():
     assert _value_matches("300", "310") is True   # ±15%
     assert _value_matches("300", "180") is False
     assert _value_matches("сенсорное", "Сенсорное управление") is True
+
+
+# ── Несколько значений одного атрибута = «или» ───────────────────────────────
+
+def test_same_attribute_constraints_are_or_not_and():
+    # «вытяжка отдельная ИЛИ скошенная ИЛИ труба» → три eq на «Тип кухонной
+    # вытяжки». Требовать их одновременно нельзя: не проходил никто, включалось
+    # смягчение, и клиент получал полновстраиваемую — ровно то, чего не хотел.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import AttrConstraint, CatalogProduct, ProductSpec
+
+    spec = ProductSpec(raw_text="вытяжка отдельная или скошенная или труба",
+                       attr_constraints=[
+                           AttrConstraint(attribute="Тип кухонной вытяжки", op="eq",
+                                          value="Островная"),
+                           AttrConstraint(attribute="Тип кухонной вытяжки", op="eq",
+                                          value="Наклонная"),
+                           AttrConstraint(attribute="Тип кухонной вытяжки", op="eq",
+                                          value="Настенная-тубус"),
+                       ])
+    sel = ProductSelector()
+
+    naklon = CatalogProduct(title="Вытяжка A", url="a", price=10000,
+                            attributes={"Тип кухонной вытяжки": "Наклонная"})
+    tubus = CatalogProduct(title="Вытяжка B", url="b", price=11000,
+                           attributes={"Тип кухонной вытяжки": "Настенная-тубус"})
+    builtin = CatalogProduct(title="Вытяжка C", url="c", price=9000,
+                             attributes={"Тип кухонной вытяжки": "Полновстраиваемая"})
+
+    assert sel.passes_filters(spec, naklon) is True     # подходит одно из значений
+    assert sel.passes_filters(spec, tubus) is True
+    assert sel.passes_filters(spec, builtin) is False   # не подходит ни одно
+
+    # И в выдаче полновстраиваемой быть не должно — смягчение не включается.
+    ranked = sel.ranked_candidates(spec, [naklon, tubus, builtin])
+    assert builtin not in ranked and len(ranked) == 2
+
+
+def test_different_attributes_still_and():
+    # Разные атрибуты по-прежнему требуются вместе.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import AttrConstraint, CatalogProduct, ProductSpec
+
+    spec = ProductSpec(raw_text="газовая варочная 600", attr_constraints=[
+        AttrConstraint(attribute="Вид варочной поверхности", op="eq", value="Газовая"),
+        AttrConstraint(attribute="Тип установки", op="eq", value="Встраиваемый"),
+    ])
+    sel = ProductSelector()
+    good = CatalogProduct(title="Панель A", url="a", price=20000, attributes={
+        "Вид варочной поверхности": "Газовая", "Тип установки": "Встраиваемый"})
+    wrong = CatalogProduct(title="Панель B", url="b", price=20000, attributes={
+        "Вид варочной поверхности": "Газовая", "Тип установки": "Отдельностоящий"})
+    assert sel.passes_filters(spec, good) is True
+    assert sel.passes_filters(spec, wrong) is False
+
+
+def test_unknown_attribute_value_not_filtered_out():
+    # «Молчание» карточки не должно отсекать товар (у необогащённых атрибута нет).
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import AttrConstraint, CatalogProduct, ProductSpec
+
+    spec = ProductSpec(raw_text="вытяжка наклонная", attr_constraints=[
+        AttrConstraint(attribute="Тип кухонной вытяжки", op="eq", value="Наклонная")])
+    silent = CatalogProduct(title="Вытяжка X", url="x", price=9000, attributes={})
+    assert ProductSelector().passes_filters(spec, silent) is True

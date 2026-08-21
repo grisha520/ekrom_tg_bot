@@ -122,3 +122,15 @@ def test_parse_attributes_from_html():
     )
     attrs = _parse_attributes(html)
     assert attrs == {"Цвет": "Чёрный", "Объем, л": "72"}  # пустое значение пропущено
+
+
+def test_cache_ttl_survives_one_missed_crawl():
+    # Кэш обновляется ночным cron раз в сутки. При TTL ровно 24 ч один пропуск
+    # задания обесценивал всю базу, и подбор молча уходил на живой обход — это
+    # первая страница категории (~21 товар вместо тысячи): в живом запросе
+    # холодильник «не нашёлся» при 117 подходящих в кэше.
+    from max_ekrom_bot.config import Settings
+
+    ttl = Settings(telegram_bot_token="x").catalog_cache_ttl
+    assert ttl > 24 * 3600, "TTL должен переживать пропуск одного ночного краула"
+    assert ttl >= 48 * 3600

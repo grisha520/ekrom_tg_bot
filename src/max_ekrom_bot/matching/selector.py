@@ -587,12 +587,24 @@ class ProductSelector:
         # Ограничения по характеристикам (схемо-маппер): eq/gte/lte — жёстко
         # отсекаем при ЯВНОМ несоответствии; approx — только сигнал (не фильтр);
         # неизвестное значение («молчание») — не отсекаем.
+        #
+        # Несколько eq на ОДИН атрибут — это перечисление клиента через «или»
+        # («вытяжка отдельная ИЛИ скошенная ИЛИ труба» → три значения «Тип
+        # кухонной вытяжки»). Требовать их одновременно нельзя: не проходил
+        # никто, срабатывало смягчение, и в комплект попадала полновстраиваемая —
+        # ровно то, чего клиент не хотел. Поэтому внутри атрибута — ИЛИ.
         if not ignore_constraints:
+            by_attr: dict[str, list] = {}
             for c in spec.attr_constraints:
                 if c.op == "approx":
                     continue
-                if _constraint_result(product, c) is False:
-                    return False
+                by_attr.setdefault(c.attribute.lower(), []).append(c)
+            for group in by_attr.values():
+                results = [_constraint_result(product, c) for c in group]
+                if any(r is True for r in results):
+                    continue                      # хотя бы одно значение подошло
+                if any(r is False for r in results) and not any(r is None for r in results):
+                    return False                  # все известные — мимо
 
         colors = _product_colors(product)
 
