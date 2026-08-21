@@ -321,3 +321,21 @@ def test_service_icons_are_original_vectors_from_reference():
     html = build_cart_html(_sel(), _S, None)
     # фирменный цвет иконок документа
     assert "#0a4250" in html
+
+
+def test_country_flags_are_originals_from_reference():
+    # Флаги Турции и Китая — векторные оригиналы из эталонных PDF (с полумесяцем
+    # и звёздами), а не цветные кружки-полоски.
+    from max_ekrom_bot.pdf.cart_html import _ASSETS, _flag
+
+    for code in ("tr", "cn"):
+        assert (_ASSETS / f"flag_{code}.svg").exists(), f"нет флага {code}"
+
+    tr, cn = _flag("Турция"), _flag("Китай")
+    assert "#d70027" in tr and "#efefef" in tr      # красный фон + полумесяц/звезда
+    assert "#d70027" in cn and "#ffda44" in cn      # красный фон + жёлтые звёзды
+
+    # Страна не указана — серый круг, как в документе сайта.
+    assert "flag--none" in _flag(None) and "flag--none" in _flag("-")
+    # Для стран без оригинала остаётся свой круглый флаг (не падаем).
+    assert "<svg" in _flag("Россия")

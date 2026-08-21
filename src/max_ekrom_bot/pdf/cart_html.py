@@ -75,9 +75,23 @@ def _logo_svg() -> str:
     return svg.replace("<svg ", '<svg class="logo-svg" ', 1)
 
 
-# ── Флаги стран (круглые SVG; эмодзи-флаги в Chromium ненадёжны) ───────────────
+# ── Флаги стран ───────────────────────────────────────────────────────────────
+# Флаги в документе сайта — векторные, с настоящим гербом (полумесяц у Турции,
+# пять звёзд у Китая). Оригиналы извлечены из эталонных PDF и лежат в assets;
+# для стран, которых в эталонах не было, остаётся свой круглый флаг из полос.
+_FLAG_FILES: dict[str, str] = {
+    "турц": "tr",
+    "кита": "cn",   # «Китай», «Китая»
+}
+
+
 def _flag(country: str | None) -> str:
     c = (country or "").strip().lower()
+    for sub, code in _FLAG_FILES.items():
+        if sub in c:
+            svg = _icon_svg(f"flag_{code}", 13.5, prefix="")
+            if svg:
+                return f'<span class="flag">{svg}</span>'
     key = next((k for k in _FLAGS if k in c), None)
     if key:
         return _FLAGS[key]
@@ -120,11 +134,11 @@ def _warranty_icon() -> str:
     return f'<img class="ic-warranty" src="{uri}" alt="">' if uri else ""
 
 
-@lru_cache(maxsize=8)
-def _icon_svg(name: str, height_pt: float) -> str:
-    """SVG-иконка из assets, вписанная в заданную высоту (pt)."""
+@lru_cache(maxsize=16)
+def _icon_svg(name: str, height_pt: float, prefix: str = "icon_") -> str:
+    """SVG из assets, вписанный в заданную высоту (pt). prefix — «icon_» или «»."""
     try:
-        svg = (_ASSETS / f"icon_{name}.svg").read_text(encoding="utf-8")
+        svg = (_ASSETS / f"{prefix}{name}.svg").read_text(encoding="utf-8")
     except Exception:  # noqa: BLE001 — без файла блок просто останется без значка
         return ""
     # Свои width/height заменяем на печатные, пропорции держит viewBox.
