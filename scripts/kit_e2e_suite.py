@@ -39,6 +39,12 @@ class KitCase:
     brands: tuple[str, ...] | None = None    # допустимые бренды комплекта (или любые из 5)
     expect_manager_specs: bool = False       # должны быть позиции «менеджеру» (вне охвата)
     allow_empty: bool = False                # расплывчатый запрос: допустимо без комплекта
+    # Требования клиента, которые обязаны быть соблюдены В ТОВАРАХ комплекта.
+    forbid_colors: tuple[str, ...] = ()      # «не чёрное» — таких цветов быть не должно
+    require_attr: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # {атрибут: допустимые значения} — проверяем у позиций, где атрибут заполнен
+    max_item_price: int | None = None        # «до 30000» — потолок цены позиции
+    expect_gift: bool = False                # ожидаем подарок по акции
 
 
 # Реальные формулировки клиентов (из примеров онбординга, эталонных подборок
@@ -58,6 +64,84 @@ CASES: list[KitCase] = [
     KitCase("духовка до 30000 и варочная до 20000", min_cover=2),
     KitCase("микроволновка, духовка и варочная", min_cover=3),
     KitCase("хочу технику для кухни", allow_empty=True),
+
+    # ── Сокращения и телеграфный стиль (как пишут мебельщики) ────────────────
+    KitCase("1.вытяжка полновстр 600\n2. варка 3-х комф. , электро\n"
+            "3. духовка 450\n4. п/м 450", min_cover=4),
+    KitCase("нужны д/ш 600, в/п газовая 600, п/м 600", min_cover=3),
+    KitCase("х/к встраиваемый, духовка, варка индукция", min_cover=3),
+    KitCase("свч встройка 600 + духовой шкаф нерж", min_cover=2),
+
+    # ── Цвет и его исключения ───────────────────────────────────────────────
+    KitCase("духовка, варочная и вытяжка — всё белое", min_cover=3,
+            forbid_colors=("чёрный",)),
+    KitCase("комплект техники, только не чёрное: духовка, варочная, вытяжка",
+            min_cover=3, forbid_colors=("чёрный",)),
+    KitCase("духовой шкаф нержавейка и варочная панель нержавейка", min_cover=2),
+    KitCase("вытяжка белая, духовка белая, посудомойка", min_cover=3,
+            forbid_colors=("чёрный",)),
+
+    # ── Тип вытяжки (частая ошибка: полновстраиваемая вместо наклонной) ──────
+    KitCase("вытяжка наклонная 600 и духовой шкаф", min_cover=2,
+            require_attr={"Тип кухонной вытяжки": ("Наклонная",)}),
+    KitCase("вытяжка купольная и варочная панель", min_cover=2,
+            require_attr={"Тип кухонной вытяжки": ("Купольная",)}),
+    KitCase("вытяжка полновстраиваемая 60 см, духовка, варочная", min_cover=3,
+            require_attr={"Тип кухонной вытяжки": ("Полновстраиваемая",)}),
+    KitCase("вытяжка отдельная или скошенная или труба, духовка, варочная",
+            min_cover=3,
+            require_attr={"Тип кухонной вытяжки": ("Наклонная", "Купольная",
+                                                   "Настенная-тубус", "Островная",
+                                                   "Т-образная")}),
+
+    # ── Топливо и конфорки ──────────────────────────────────────────────────
+    KitCase("газовая варочная панель 4 конфорки и электрический духовой шкаф",
+            min_cover=2, require_attr={"Вид варочной поверхности": ("Газовая",)}),
+    KitCase("индукционная варочная панель и духовка с конвекцией", min_cover=2,
+            require_attr={"Вид варочной поверхности": ("Индукционная",)}),
+    KitCase("варочная на 2 конфорки домино и духовой шкаф 45 см", min_cover=2),
+
+    # ── Установка: встраиваемое против отдельностоящего ─────────────────────
+    KitCase("встраиваемый холодильник, духовка и варочная", min_cover=3,
+            require_attr={"Тип установки": ("Встраиваемый",)}),
+    KitCase("отдельностоящий холодильник side by side и духовой шкаф", min_cover=2),
+    KitCase("отдельностоящая стиральная машина с сушкой", min_cover=1),
+
+    # ── Бюджет ──────────────────────────────────────────────────────────────
+    KitCase("духовой шкаф до 30000 и вытяжка до 15000", min_cover=2),
+    KitCase("недорогой комплект: духовка, варочная, вытяжка до 60000 за всё",
+            min_cover=3),
+
+    # ── Габариты ────────────────────────────────────────────────────────────
+    KitCase("посудомоечная машина 45 см и духовой шкаф 60 см", min_cover=2),
+    KitCase("узкая посудомойка 450, компактная духовка, вытяжка 500", min_cover=2),
+
+    # ── Объём/класс/шум — характеристики за пределами базовых полей ──────────
+    KitCase("холодильник от 300 литров No Frost и духовой шкаф", min_cover=2),
+    KitCase("посудомойка на 14 комплектов и тихая вытяжка", min_cover=2),
+    KitCase("духовой шкаф с пиролизом и варочная с зоной расширения", min_cover=2),
+
+    # ── Акции: подарок и спеццена ───────────────────────────────────────────
+    KitCase("Midea: духовка, варочная, вытяжка, свч и посудомойка", min_cover=5,
+            brands=("Midea",)),
+    KitCase("Kuppersberg комплект: духовка, варочная, вытяжка, посудомойка "
+            "и встраиваемый холодильник", min_cover=5, brands=("Kuppersberg",)),
+
+    # ── Вне охвата (должно уходить менеджеру) ───────────────────────────────
+    KitCase("мойка из нержавейки, смеситель и измельчитель", allow_empty=True,
+            expect_manager_specs=True),
+    KitCase("варочная панель Smeg и духовой шкаф Bosch", allow_empty=True,
+            expect_manager_specs=True),
+    KitCase("духовка, варочная и фильтр для воды", min_cover=2,
+            expect_manager_specs=True),
+
+    # ── Каверзные и «грязные» формулировки ──────────────────────────────────
+    KitCase("добрый день! подскажите пожалуйста комплект на кухню: духовку, "
+            "варочную поверхность и вытяжку, спасибо", min_cover=3),
+    KitCase("духовкa, варочнaя, вытяжкa", min_cover=2),          # латиница в словах
+    KitCase("ДУХОВОЙ ШКАФ, ВАРОЧНАЯ ПАНЕЛЬ, ВЫТЯЖКА", min_cover=3),
+    KitCase("духовой шкаф", min_cover=1),                        # одна позиция
+    KitCase("вытяжка, вытяжка, вытяжка", min_cover=1),           # дубли
 ]
 
 
@@ -99,6 +183,39 @@ def _honesty_notes(combo) -> list[str]:
     else:
         if abs(combo.final_total - combo.subtotal) > 0.01:
             notes.append("акция не применена, но итог изменён")
+    return notes
+
+
+def _requirement_notes(case: KitCase, kit) -> list[str]:
+    """Соблюдены ли требования клиента В САМИХ ТОВАРАХ комплекта.
+
+    Проверяем по фактическим карточкам, а не по разбору: клиент судит по тому,
+    что ему прислали. Пустой атрибут не считаем нарушением — у части карточек
+    характеристики не заполнены, и придираться к молчанию нельзя.
+    """
+    from max_ekrom_bot.matching.selector import _canon_color, _product_colors
+
+    notes: list[str] = []
+    for item in kit.selection.matched:
+        product = item.product
+        title = product.title[:40]
+        attrs = product.attributes or {}
+
+        for forbidden in case.forbid_colors:
+            want = _canon_color(forbidden)
+            if want in _product_colors(product):
+                notes.append(f"запрещённый цвет «{forbidden}»: {title}")
+
+        for attr, allowed in case.require_attr.items():
+            value = attrs.get(attr)
+            if value and not any(a.lower() in value.lower() for a in allowed):
+                notes.append(f"{attr} = «{value}», ожидали {allowed}: {title}")
+
+        if case.max_item_price and (product.price or 0) > case.max_item_price:
+            notes.append(f"дороже потолка {case.max_item_price}: {title}")
+
+    if case.expect_gift and not kit.combo.gift_title:
+        notes.append("ожидали подарок по акции — его нет")
     return notes
 
 
@@ -148,6 +265,7 @@ async def run_case(pipeline: Pipeline, case: KitCase) -> CaseResult:
             res.notes.append(f"бренд {kit.brand} вне разрешённых {case.brands}")
         if case.expect_manager_specs and not res.manager_specs:
             res.notes.append("ожидали позиции для менеджера — их нет")
+        res.notes += _requirement_notes(case, kit)
         if res.message_len < 100:
             res.notes.append("подозрительно короткое сообщение клиенту")
         if (res.pdf_bytes or 0) <= 5000:
