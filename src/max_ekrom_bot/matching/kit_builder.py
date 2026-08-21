@@ -28,7 +28,7 @@ from ..models import ApplianceType, CatalogProduct, MatchedItem, ProductSpec, Se
 from .combo_pricing import ComboItem, ComboResult, best_combo
 from .selector import (
     ProductSelector, _canon_color, _COLOR_FAMILY, _product_colors, _product_fuels,
-    _product_install, _product_width,
+    _install_family, _product_install, _product_width,
 )
 
 # Пять брендов проекта (дублируем как строки, чтобы не тянуть сетевой модуль promos).
@@ -194,9 +194,12 @@ def replacement_note(spec: ProductSpec, product: CatalogProduct) -> str:
                 notes.append(f"{', '.join(sorted(have_fuel))} вместо «{spec.fuel_type}»")
 
     if spec.install_type:
-        want_inst = spec.install_type.strip().lower()[:6]
+        # Сравниваем СЕМЬЮ установки, а не куски слов: клиент пишет «встроенная»,
+        # каталог — «Встраиваемый», и сверка по первым буквам («встрое» против
+        # «встраиваемый») давала пометку о замене там, где речь об одном и том же.
+        want_inst = _install_family(spec.install_type)
         have_inst = _product_install(product)
-        if have_inst and want_inst not in have_inst.lower():
+        if want_inst and have_inst and want_inst != have_inst:
             notes.append(f"установка «{have_inst}» вместо «{spec.install_type}»")
 
     if not notes:

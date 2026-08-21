@@ -513,3 +513,41 @@ def test_group_color_still_preferred_over_colorless():
     ]
     kit = build_brand_kit("Korting", specs, cands, [])
     assert "чёрный" in kit.selection.matched[1].product.title.lower()
+
+
+def test_no_replacement_note_for_same_install_family():
+    # «встроенная» (клиент) и «Встраиваемый» (каталог) — одно и то же: сверка по
+    # первым буквам давала ложную пометку о замене.
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=ApplianceType.MICROWAVE,
+                       raw_text="свч встроенная 600", install_type="встроенная")
+    product = CatalogProduct(title="Микроволновая печь Midea MI10257GW", url="u",
+                             price=30990, attributes={"Тип установки": "Встраиваемый"})
+    assert replacement_note(spec, product) == ""
+
+
+def test_replacement_note_when_install_family_differs():
+    # Настоящее расхождение (просили встраиваемый — нашёлся отдельностоящий)
+    # по-прежнему помечается.
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=ApplianceType.FRIDGE,
+                       raw_text="встраиваемый холодильник", install_type="встраиваемый")
+    product = CatalogProduct(title="Холодильник Midea X", url="u", price=42990,
+                             attributes={"Тип установки": "Отдельностоящий"})
+    note = replacement_note(spec, product)
+    assert "установка" in note and "тдельностоящ" in note
+
+
+def test_no_note_when_install_type_is_not_about_mounting():
+    # «отдельная или скошенная или труба» — это про ТИП вытяжки, а не установку:
+    # семьи не распознаются, ложной пометки быть не должно.
+    from max_ekrom_bot.matching.kit_builder import replacement_note
+
+    spec = ProductSpec(appliance=ApplianceType.HOOD,
+                       raw_text="вытяжка отдельная или скошенная или труба",
+                       install_type="отдельная или скошенная или труба")
+    product = CatalogProduct(title="Кухонная вытяжка наклонная Midea", url="u",
+                             price=18990, attributes={"Тип кухонной вытяжки": "Наклонная"})
+    assert replacement_note(spec, product) == ""
