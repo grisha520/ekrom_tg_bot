@@ -27,10 +27,17 @@ mkdir -p "$LOG_DIR"
 
 # Каталог — в 04:00, акции — в 04:40 (после каталога: цена подарка ищется по
 # таблице products, которую наполняет краул каталога).
+#
+# Третье задание — ежечасная проверка свежести. Ночной cron срабатывает,
+# только если сервер в этот момент работает: VPS простоял с вечера 20.08 до
+# середины дня 21.08, оба задания пропали, кэш протух, и подбор молча ушёл на
+# живой обход — первую страницу категории вместо полного каталога. Проверка
+# почти всегда ничего не делает и лишь догоняет пропущенное.
 NEW_JOBS=$(cat <<EOF
 $MARK (не редактируйте вручную — перезапишется deploy/install-cron.sh)
 0 4 * * * cd $REPO_DIR && $PYTHON scripts/crawl_catalog.py >> $LOG_DIR/crawl_catalog.log 2>&1
 40 4 * * * cd $REPO_DIR && $PYTHON scripts/crawl_promos.py >> $LOG_DIR/crawl_promos.log 2>&1
+25 * * * * cd $REPO_DIR && $PYTHON scripts/crawl_if_stale.py >> $LOG_DIR/crawl_if_stale.log 2>&1
 EOF
 )
 
@@ -38,7 +45,7 @@ echo "==> Обновляю crontab пользователя $(whoami)…"
 CURRENT="$(crontab -l 2>/dev/null || true)"
 # Выкидываем прошлые строки этого скрипта (маркер + обе задачи), остальное храним.
 KEPT="$(printf '%s\n' "$CURRENT" | grep -v -F "$MARK" | grep -v -F "scripts/crawl_catalog.py" \
-        | grep -v -F "scripts/crawl_promos.py" || true)"
+        | grep -v -F "scripts/crawl_promos.py" | grep -v -F "scripts/crawl_if_stale.py" || true)"
 printf '%s\n%s\n' "$KEPT" "$NEW_JOBS" | sed '/^$/d' | crontab -
 
 echo "==> Готово. Текущие задания:"
