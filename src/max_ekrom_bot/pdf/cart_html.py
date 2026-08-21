@@ -80,48 +80,34 @@ def _logo_svg() -> str:
 # пять звёзд у Китая). Оригиналы извлечены из эталонных PDF и лежат в assets;
 # для стран, которых в эталонах не было, остаётся свой круглый флаг из полос.
 _FLAG_FILES: dict[str, str] = {
-    "турц": "tr",
-    "кита": "cn",   # «Китай», «Китая»
+    "австр": "at", "беларус": "by", "болгар": "bg", "великобрит": "gb",
+    "венгр": "hu", "герман": "de", "дан": "dk", "евросоюз": "eu",
+    "инди": "in", "испан": "es", "итал": "it", "кита": "cn", "литв": "lt",
+    "малайз": "my", "польш": "pl", "португал": "pt", "росс": "ru",
+    "румын": "ro", "серб": "rs", "словак": "sk", "словен": "si",
+    "таиланд": "th", "турц": "tr", "филиппин": "ph", "франц": "fr",
+    "чех": "cz", "швейцар": "ch", "корея": "kr", "япон": "jp",
 }
+# «Австрия» не должна ловиться подстрокой «австр» раньше «Австралии» и наоборот —
+# сначала пробуем самые длинные ключи.
+_FLAG_ORDER: tuple[str, ...] = tuple(sorted(_FLAG_FILES, key=len, reverse=True))
 
 
 def _flag(country: str | None) -> str:
+    """Флаг страны как в документе сайта.
+
+    Есть файл — рисуем оригинал; нет — серый круг. Своих «похожих» флагов не
+    придумываем: для части стран (Швейцария, Индия, Таиланд…) сам сайт печатает
+    серый круг, и выдумка отличала бы наш документ от эталона.
+    """
     c = (country or "").strip().lower()
-    for sub, code in _FLAG_FILES.items():
+    for sub in _FLAG_ORDER:
         if sub in c:
-            svg = _icon_svg(f"flag_{code}", 13.5, prefix="")
+            svg = _icon_svg(f"flag_{_FLAG_FILES[sub]}", 13.5, prefix="")
             if svg:
                 return f'<span class="flag">{svg}</span>'
-    key = next((k for k in _FLAGS if k in c), None)
-    if key:
-        return _FLAGS[key]
+            break
     return '<span class="flag flag--none"></span>'  # серый круг, как в оригинале «-»
-
-
-def _round_flag(stripes: list[str], horizontal: bool = True) -> str:
-    """Круглый флаг из цветных полос (упрощённо, узнаваемо на 22px)."""
-    n = len(stripes)
-    bars = []
-    for i, col in enumerate(stripes):
-        if horizontal:
-            bars.append(f'<rect x="0" y="{i*24/n}" width="24" height="{24/n}" fill="{col}"/>')
-        else:
-            bars.append(f'<rect x="{i*24/n}" y="0" width="{24/n}" height="24" fill="{col}"/>')
-    return (f'<span class="flag"><svg viewBox="0 0 24 24" width="22" height="22">'
-            f'<defs><clipPath id="cf"><circle cx="12" cy="12" r="12"/></clipPath></defs>'
-            f'<g clip-path="url(#cf)">{"".join(bars)}</g></svg></span>')
-
-
-_FLAGS = {
-    "росс": _round_flag(["#fff", "#0039A6", "#D52B1E"]),
-    "китай": _round_flag(["#DE2910", "#DE2910"]),
-    "кита": _round_flag(["#DE2910", "#DE2910"]),
-    "турц": _round_flag(["#E30A17", "#E30A17"]),
-    "герман": _round_flag(["#000", "#DD0000", "#FFCE00"]),
-    "итал": _round_flag(["#009246", "#fff", "#CE2B37"], horizontal=False),
-    "польш": _round_flag(["#fff", "#DC143C"]),
-    "беларус": _round_flag(["#D22730", "#009A44"]),
-}
 
 
 # ── Иконки ────────────────────────────────────────────────────────────────────

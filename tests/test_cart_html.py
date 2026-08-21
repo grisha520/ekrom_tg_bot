@@ -337,5 +337,11 @@ def test_country_flags_are_originals_from_reference():
 
     # Страна не указана — серый круг, как в документе сайта.
     assert "flag--none" in _flag(None) and "flag--none" in _flag("-")
-    # Для стран без оригинала остаётся свой круглый флаг (не падаем).
-    assert "<svg" in _flag("Россия")
+    # Библиотека флагов собрана с сайта: основные страны каталога закрыты.
+    for country in ("Германия", "Россия", "Италия", "Польша", "Япония",
+                    "Евросоюз", "Великобритания", "Чехия", "Сербия"):
+        assert '<span class="flag"><svg' in _flag(country), country
+
+    # Для стран, которым сайт флага не рисует, — серый круг, а не выдуманный флаг.
+    for country in ("Швейцария", "Индия", "Таиланд"):
+        assert "flag--none" in _flag(country), country
