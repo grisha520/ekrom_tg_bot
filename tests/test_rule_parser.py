@@ -204,3 +204,32 @@ def test_leaked_burners_dropped():
     ]
     drop_leaked_attributes(specs)
     assert specs[0].burners is None and specs[1].burners == 4
+
+
+def test_leak_detected_even_when_llm_trims_raw_text():
+    # Модель обрезает raw_text («духовой шкаф 450» вместо «духовка 450 (графит…)»),
+    # и утечку не отличить от общего требования — сверяемся с исходным сообщением.
+    from max_ekrom_bot.models import ApplianceType as A
+    from max_ekrom_bot.parsing.abbreviations import expand_abbreviations
+    from max_ekrom_bot.parsing.parser import drop_leaked_attributes
+
+    message = expand_abbreviations(
+        "нужен комплект техники:\n"
+        "1.вытяжка полновстр 600\n"
+        "2. варка 3-х комф. , электро\n"
+        "3. духовка 450  ( графит или с нерж.элементами)\n"
+        "4. п/м 450"
+    )
+    specs = [
+        _spec(A.HOOD, "вытяжка полновстраиваемая 600",
+              color="графит", install_type="полновстраиваемая"),
+        _spec(A.COOKTOP, "варочная панель 3 конфорки, электрическая",
+              burners=3, fuel_type="электрическая"),
+        _spec(A.OVEN, "духовой шкаф 450", color="графит"),      # raw_text обрезан
+        _spec(A.DISHWASHER, "посудомоечная машина 450"),
+    ]
+    drop_leaked_attributes(specs, message)
+
+    assert specs[0].color is None                       # вытяжке цвет не приписан
+    assert specs[0].install_type == "полновстраиваемая"
+    assert specs[2].color == "графит"                   # у духовки цвет сохранён

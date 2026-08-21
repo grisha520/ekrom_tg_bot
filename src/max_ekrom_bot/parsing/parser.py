@@ -175,7 +175,25 @@ def _mentions_burners(text: str, burners: int) -> bool:
     return bool(re.search(rf"\b{burners}\b", text))
 
 
-def drop_leaked_attributes(specs: list[ProductSpec]) -> list[ProductSpec]:
+def _position_texts(specs: list[ProductSpec], message: str = "") -> list[str]:
+    """Строки исходного запроса по позициям (иначе — raw_text от модели).
+
+    `raw_text` модель нередко обрезает («духовой шкаф 450» вместо «духовка 450
+    (графит или нерж)»), и тогда утечку не отличить от общего требования. Если
+    исходное сообщение делится ровно на столько же пунктов, сверяемся по ним.
+    """
+    from .rule_parser import _split_items
+
+    if message:
+        items = _split_items(message)
+        if len(items) == len(specs):
+            return [s.lower() for s in items]
+    return [(spec.raw_text or "").lower() for spec in specs]
+
+
+def drop_leaked_attributes(
+    specs: list[ProductSpec], message: str = ""
+) -> list[ProductSpec]:
     """Убрать характеристики, утёкшие в позицию от СОСЕДНЕЙ (правит на месте).
 
     В живом запросе «духовка 450 (графит или нерж)» цвет и «электро» из строки про
@@ -188,7 +206,7 @@ def drop_leaked_attributes(specs: list[ProductSpec]) -> list[ProductSpec]:
     """
     if len(specs) < 2:
         return specs
-    texts = [(spec.raw_text or "").lower() for spec in specs]
+    texts = _position_texts(specs, message)
     checks = (
         ("color", _mentions_color),
         ("fuel_type", _mentions_fuel),
@@ -219,6 +237,6 @@ class RequestParser:
         request = CustomerRequest.model_validate(data)
         for spec in request.specs:
             drop_phantom_width(spec)
-        drop_leaked_attributes(request.specs)
+        drop_leaked_attributes(request.specs, message)
         request.original_message = message
         return request
