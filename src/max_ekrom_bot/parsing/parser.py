@@ -148,6 +148,63 @@ def drop_phantom_width(spec: ProductSpec) -> ProductSpec:
     return spec
 
 
+# ── Утечка характеристик между позициями ─────────────────────────────────────
+# Стемы, по которым видно, что характеристика НАЗВАНА в строке позиции.
+_FUEL_STEMS: tuple[str, ...] = ("электр", "газ", "индукц", "комбинир")
+_INSTALL_STEMS: tuple[str, ...] = ("встра", "встро", "отдельностоящ", "полновстр")
+
+
+def _mentions_color(text: str, color: str) -> bool:
+    """Назван ли этот цвет (или его синоним) в тексте позиции."""
+    from ..matching.selector import _title_colors  # локально: parsing→matching
+
+    return bool(_title_colors(text) & _title_colors(color))
+
+
+def _mentions_fuel(text: str, fuel: str) -> bool:
+    stem = next((s for s in _FUEL_STEMS if s in fuel.lower()), None)
+    return bool(stem and stem in text)
+
+
+def _mentions_install(text: str, install: str) -> bool:
+    stem = next((s for s in _INSTALL_STEMS if s in install.lower()), None)
+    return bool(stem and stem in text)
+
+
+def _mentions_burners(text: str, burners: int) -> bool:
+    return bool(re.search(rf"\b{burners}\b", text))
+
+
+def drop_leaked_attributes(specs: list[ProductSpec]) -> list[ProductSpec]:
+    """Убрать характеристики, утёкшие в позицию от СОСЕДНЕЙ (правит на месте).
+
+    В живом запросе «духовка 450 (графит или нерж)» цвет и «электро» из строки про
+    варочную модель приписала заодно вытяжке — та поехала бы искаться в графите,
+    хотя клиент цвета для неё не называл.
+
+    Сбрасываем только явную утечку: характеристики нет в своей строке, но она
+    названа в строке другой позиции. Если её нет нигде конкретно — это общее
+    требование из шапки («всё не чёрное»), и его сохраняем.
+    """
+    if len(specs) < 2:
+        return specs
+    texts = [(spec.raw_text or "").lower() for spec in specs]
+    checks = (
+        ("color", _mentions_color),
+        ("fuel_type", _mentions_fuel),
+        ("install_type", _mentions_install),
+        ("burners", _mentions_burners),
+    )
+    for i, spec in enumerate(specs):
+        for field, mentions in checks:
+            value = getattr(spec, field)
+            if not value or mentions(texts[i], value):
+                continue                       # не задано или названо у себя
+            if any(mentions(t, value) for j, t in enumerate(texts) if j != i):
+                setattr(spec, field, None)     # названо у соседа — это утечка
+    return specs
+
+
 class RequestParser:
     def __init__(self, llm: LLMProvider | None = None) -> None:
         self._llm = llm or get_llm_provider()
@@ -162,5 +219,6 @@ class RequestParser:
         request = CustomerRequest.model_validate(data)
         for spec in request.specs:
             drop_phantom_width(spec)
+        drop_leaked_attributes(request.specs)
         request.original_message = message
         return request

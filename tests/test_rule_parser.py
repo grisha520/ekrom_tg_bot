@@ -139,3 +139,68 @@ def test_width_recognised_without_space_before_unit():
         spec = _spec_w(raw, 500)
         drop_phantom_width(spec)
         assert spec.width_mm == 500, raw
+
+
+# ── Утечка характеристик между позициями ─────────────────────────────────────
+
+def _spec(appliance, raw, **kw):
+    from max_ekrom_bot.models import ProductSpec
+    return ProductSpec(appliance=appliance, raw_text=raw, **kw)
+
+
+def test_leaked_color_and_fuel_dropped_from_neighbour():
+    # Живой запрос: цвет и «электро» из строк про духовку/варочную модель
+    # приписала заодно вытяжке — та поехала бы искаться в графите.
+    from max_ekrom_bot.models import ApplianceType as A
+    from max_ekrom_bot.parsing.parser import drop_leaked_attributes
+
+    specs = [
+        _spec(A.HOOD, "вытяжка полновстраиваемая 600",
+              color="графит", fuel_type="электрическая", install_type="полновстраиваемая"),
+        _spec(A.COOKTOP, "варочная панель 3 конфорки, электрическая",
+              burners=3, fuel_type="электрическая"),
+        _spec(A.OVEN, "духовой шкаф 450 (графит или нержавеющая сталь)", color="графит"),
+    ]
+    drop_leaked_attributes(specs)
+
+    hood, cooktop, oven = specs
+    assert hood.color is None                  # чужой цвет убран
+    assert hood.fuel_type is None              # чужое топливо убрано
+    assert hood.install_type == "полновстраиваемая"   # своё требование осталось
+    assert cooktop.fuel_type == "электрическая" and cooktop.burners == 3
+    assert oven.color == "графит"              # цвет назван в своей строке
+
+
+def test_common_requirement_from_header_is_kept():
+    # «всё не чёрное» задано в шапке, а не в строке позиции: характеристики нет
+    # ни у кого конкретно — это общее требование, его сбрасывать нельзя.
+    from max_ekrom_bot.models import ApplianceType as A
+    from max_ekrom_bot.parsing.parser import drop_leaked_attributes
+
+    specs = [
+        _spec(A.OVEN, "духовой шкаф 600", color="белый"),
+        _spec(A.HOOD, "вытяжка 600", color="белый"),
+    ]
+    drop_leaked_attributes(specs)
+    assert [s.color for s in specs] == ["белый", "белый"]
+
+
+def test_single_position_untouched():
+    from max_ekrom_bot.models import ApplianceType as A
+    from max_ekrom_bot.parsing.parser import drop_leaked_attributes
+
+    specs = [_spec(A.OVEN, "духовой шкаф", color="чёрный")]
+    drop_leaked_attributes(specs)
+    assert specs[0].color == "чёрный"
+
+
+def test_leaked_burners_dropped():
+    from max_ekrom_bot.models import ApplianceType as A
+    from max_ekrom_bot.parsing.parser import drop_leaked_attributes
+
+    specs = [
+        _spec(A.OVEN, "духовой шкаф 600", burners=4),          # у духовки конфорок нет
+        _spec(A.COOKTOP, "варочная панель 4 конфорки", burners=4),
+    ]
+    drop_leaked_attributes(specs)
+    assert specs[0].burners is None and specs[1].burners == 4
