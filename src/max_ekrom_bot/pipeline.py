@@ -34,6 +34,7 @@ from .models import (
     SelectionResult,
 )
 from .parsing import get_parser
+from .parsing.abbreviations import expand_abbreviations
 from .parsing.factory import Parser
 
 logger = logging.getLogger(__name__)
@@ -248,7 +249,12 @@ class Pipeline:
         Для позиций, не легших в 6 встроенных типов, дополнительно выбираем
         категорию каталога моделью (расширение на весь каталог), затем привязываем
         упомянутые характеристики к реальным атрибутам категории (схемо-маппер).
+
+        Перед разбором разворачиваем сокращения («п/м 450» → «посудомоечная машина
+        450»): в телеграфных запросах LLM трактовала их наугад — посудомойка уезжала
+        в микроволновки, а иногда разбор возвращал пусто и бот отвечал «не понял».
         """
+        message = expand_abbreviations(message)
         request = self._parser.parse(message)
         if any(s.appliance is ApplianceType.UNKNOWN for s in request.specs):
             try:

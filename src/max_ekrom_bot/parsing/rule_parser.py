@@ -14,13 +14,17 @@ from ..models import ApplianceType, CustomerRequest, ProductSpec
 
 # Ключевые слова → тип техники. Порядок важен: СВЧ проверяем раньше духовки,
 # т.к. строка «СВЧ встроенная ... с духовкой» содержит «духов».
+# Порядок важен: посудомойка проверяется раньше «панели»/«машины», иначе
+# «посудомоечная машина» уедет в стиральную, а «п/м» — в микроволновку.
+# Сокращения тут продублированы на случай, если текст пришёл в парсер без
+# разворота (см. parsing/abbreviations.py) — например, из старых вызовов.
 _APPLIANCE_KEYWORDS: list[tuple[ApplianceType, tuple[str, ...]]] = [
+    (ApplianceType.DISHWASHER, ("посудомо", "пмм", "п/м", "п.м")),
     (ApplianceType.MICROWAVE, ("свч", "микровол")),
     (ApplianceType.HOOD, ("вытяж",)),
-    (ApplianceType.COOKTOP, ("варочн", "конфор", "панель")),
-    (ApplianceType.OVEN, ("духов", "духовк")),
-    (ApplianceType.DISHWASHER, ("посудомо",)),
-    (ApplianceType.FRIDGE, ("холодильн",)),
+    (ApplianceType.OVEN, ("духов", "духовк", "д/ш")),
+    (ApplianceType.COOKTOP, ("варочн", "конфор", "варка", "варки", "в/п", "панель")),
+    (ApplianceType.FRIDGE, ("холодильн", "х/к")),
 ]
 
 _COLOR_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
