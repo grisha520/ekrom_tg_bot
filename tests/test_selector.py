@@ -442,3 +442,56 @@ def test_width_still_filters_when_type_not_requested():
                           attributes={"Ширина, мм": "600"})
     ranked = ProductSelector().ranked_candidates(spec, [wide, narrow])
     assert ranked[0].title == "ПММ 45"       # дешевле, но шире — не берём
+
+
+# ── Тип вытяжки распознаётся без LLM ─────────────────────────────────────────
+
+def _hood(kind, price=10000):
+    from max_ekrom_bot.models import CatalogProduct
+    return CatalogProduct(title=f"Вытяжка {kind}", url=kind, price=price,
+                          attributes={"Тип кухонной вытяжки": kind})
+
+
+def test_hood_type_filter_without_llm_constraints():
+    # Требование клиента не должно зависеть от LLM-маппера: когда он вернул
+    # битый JSON, ограничений не было и на «скошенная или труба» уходила
+    # ПОЛНОВСТРАИВАЕМАЯ. Тип берём из текста запроса.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="вытяжка отдельная или скошенная или труба")
+    sel = ProductSelector()
+    assert sel.passes_filters(spec, _hood("Наклонная")) is True
+    assert sel.passes_filters(spec, _hood("Настенная-тубус")) is True
+    assert sel.passes_filters(spec, _hood("Купольная")) is True
+    assert sel.passes_filters(spec, _hood("Полновстраиваемая")) is False
+    assert sel.passes_filters(spec, _hood("Встраиваемая")) is False
+
+
+def test_hood_type_builtin_requested():
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="вытяжка полновстраиваемая 600")
+    sel = ProductSelector()
+    assert sel.passes_filters(spec, _hood("Полновстраиваемая")) is True
+    assert sel.passes_filters(spec, _hood("Купольная")) is False
+
+
+def test_hood_type_absent_when_not_asked():
+    # Тип не назван — фильтра нет, подходит любая вытяжка.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="вытяжка 600")
+    sel = ProductSelector()
+    for kind in ("Наклонная", "Полновстраиваемая", "Купольная"):
+        assert sel.passes_filters(spec, _hood(kind)) is True
+
+
+def test_hood_filter_not_applied_to_other_appliances():
+    # Слово «островная» в запросе про другую технику не должно ничего ломать.
+    from max_ekrom_bot.matching.selector import _wanted_hood_types
+
+    assert _wanted_hood_types("духовой шкаф и варочная панель") == ()
+    assert "наклонная" in _wanted_hood_types("вытяжка наклонная")
