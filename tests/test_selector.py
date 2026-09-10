@@ -652,3 +652,43 @@ def test_kit_message_marks_bestseller():
                    combo=compute_combo([], None), requested=1, coverage=1,
                    design_consistent=True)
     assert "хит продаж" in format_kit(kit, Settings(telegram_bot_token="x"))
+
+
+# ── Вытяжки: «вытяжка 600» — это база встраивания, а не корпус ────────────────
+
+def test_hood_width_uses_embedding_base_first():
+    # У вытяжки корпус 598, база встраивания 600. Клиент пишет «вытяжка 600» —
+    # имеет в виду нишу, поэтому первой берём «База встраивания».
+    from max_ekrom_bot.matching.selector import ProductSelector, _product_width
+    from max_ekrom_bot.models import CatalogProduct, ProductSpec
+
+    hood = CatalogProduct(title="Кухонная вытяжка Maunfeld DOMINA 60 BLACK", url="h",
+                          price=21200, in_stock=True, attributes={
+                              "Ширина, мм": "598",
+                              "База встраивания, мм": "600",
+                              "Тип кухонной вытяжки": "Полновстраиваемая"})
+    assert _product_width(hood) == 600
+    spec = ProductSpec(raw_text="вытяжка 600", width_mm=600)
+    assert ProductSelector().passes_filters(spec, hood) is True
+
+
+def test_width_value_with_thousands_space_parses_correctly():
+    # «1 000» (с неразрывным пробелом, как на сайте) раньше давало 0.
+    from max_ekrom_bot.matching.selector import _product_width
+    from max_ekrom_bot.models import CatalogProduct
+
+    hood = CatalogProduct(title="Вытяжка X", url="x", price=1,
+                          attributes={"База встраивания, мм": "1\u00a0000"})
+    assert _product_width(hood) == 1000
+
+
+def test_width_fallback_order_when_base_missing():
+    # Нет базы — берём ширину встраивания, потом корпус.
+    from max_ekrom_bot.matching.selector import _product_width
+    from max_ekrom_bot.models import CatalogProduct
+
+    p1 = CatalogProduct(title="A", url="a", price=1,
+                        attributes={"Ширина, мм": "598", "Ширина встраивания, мм": "600"})
+    p2 = CatalogProduct(title="B", url="b", price=1, attributes={"Ширина, мм": "598"})
+    assert _product_width(p1) == 600
+    assert _product_width(p2) == 598
