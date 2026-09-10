@@ -495,3 +495,68 @@ def test_hood_filter_not_applied_to_other_appliances():
 
     assert _wanted_hood_types("духовой шкаф и варочная панель") == ()
     assert "наклонная" in _wanted_hood_types("вытяжка наклонная")
+
+
+# ── Продаваемость: наличие и витринный образец ───────────────────────────────
+
+def _prod(title="Духовой шкаф Korting X", price=30000, **kw):
+    from max_ekrom_bot.models import CatalogProduct
+    return CatalogProduct(title=title, url=title, price=price, **kw)
+
+
+def test_out_of_stock_never_passes_filters():
+    # Контрольная сборка 10.09: 16 из 50 позиций комплектов — «нет в наличии».
+    # Кэш отдаёт всё подряд, поэтому отсекаем в селекторе — единственной точке,
+    # через которую идут все источники кандидатов.
+    from max_ekrom_bot.matching.selector import ProductSelector, is_sellable
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф")
+    sel = ProductSelector()
+    assert is_sellable(_prod(in_stock=False)) is False
+    assert sel.passes_filters(spec, _prod(in_stock=False)) is False
+    assert sel.passes_filters(spec, _prod(in_stock=True)) is True
+
+
+def test_unknown_stock_is_not_treated_as_out_of_stock():
+    # Статус не прочитан (None) — выдумывать отсутствие нельзя.
+    from max_ekrom_bot.matching.selector import ProductSelector, is_sellable
+    from max_ekrom_bot.models import ProductSpec
+
+    assert is_sellable(_prod(in_stock=None)) is True
+    assert ProductSelector().passes_filters(ProductSpec(raw_text="духовой шкаф"),
+                                            _prod(in_stock=None)) is True
+
+
+def test_showroom_sample_is_dropped_but_available_sample_is_not():
+    # «Витринный образец» — сам товар выставочный, отбрасываем.
+    # «Есть витринный образец» — обычный товар с экземпляром в шоуруме, продаём.
+    from max_ekrom_bot.matching.selector import ProductSelector, is_sellable
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф")
+    sel = ProductSelector()
+    sample = _prod(in_stock=True, attributes={"Витринный образец": "Да"})
+    has_sample = _prod(in_stock=True, attributes={"Есть витринный образец": "Да"})
+    assert is_sellable(sample) is False and sel.passes_filters(spec, sample) is False
+    assert is_sellable(has_sample) is True and sel.passes_filters(spec, has_sample) is True
+
+
+def test_sellability_survives_relaxation():
+    # Смягчения снимают требования по цвету/размеру ради полноты комплекта, но
+    # наличие снять нельзя: ranked_candidates не должен вернуть отсутствующий
+    # товар даже когда других нет.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф чёрный 600", color="чёрный", width_mm=600)
+    only_oos = [_prod(in_stock=False, attributes={"Цвет": "Чёрный", "Ширина, мм": "600"})]
+    assert ProductSelector().ranked_candidates(spec, only_oos) == []
+
+
+def test_bestseller_flag_detection():
+    from max_ekrom_bot.matching.selector import is_bestseller
+
+    assert is_bestseller(_prod(attributes={"Хит продаж": "Да"})) is True
+    assert is_bestseller(_prod(attributes={"Хит продаж": ""})) is False
+    assert is_bestseller(_prod(attributes={})) is False

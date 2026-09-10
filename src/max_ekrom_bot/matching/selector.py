@@ -489,6 +489,35 @@ def _product_burners(product: CatalogProduct) -> int | None:
     return _title_burners(product.title)
 
 
+def _flag_set(product: CatalogProduct, key: str) -> bool:
+    """Плашка сайта в характеристиках: краулер кладёт их как «Ключ: Да»."""
+    value = (product.attributes or {}).get(key)
+    return bool(value) and str(value).strip().lower() in ("да", "yes", "true", "1")
+
+
+def is_sellable(product: CatalogProduct) -> bool:
+    """Можно ли предлагать товар клиенту.
+
+    Отсекаем два случая, которые раньше проходили в комплект (контрольная сборка
+    10.09.2026: 16 из 50 позиций — «нет в наличии»):
+    - `in_stock is False` — сайт явно сказал «нет в наличии». `None` (статус не
+      прочитан, ~14 товаров) НЕ отсекаем: выдумывать отсутствие нельзя;
+    - плашка «Витринный образец» — сам товар выставочный. Это НЕ то же, что
+      «Есть витринный образец»: там обычный товар, у которого в шоуруме стоит
+      экземпляр, — его продавать можно.
+    """
+    if product.in_stock is False:
+        return False
+    if _flag_set(product, "Витринный образец"):
+        return False
+    return True
+
+
+def is_bestseller(product: CatalogProduct) -> bool:
+    """Плашка «Хит продаж» на сайте."""
+    return _flag_set(product, "Хит продаж")
+
+
 def _product_width(product: CatalogProduct) -> int | None:
     for sub in ("ширина встраивания", "ширина"):
         wval = _attr_get(product, sub)
@@ -616,6 +645,12 @@ class ProductSelector:
         self, spec: ProductSpec, product: CatalogProduct, ignore_constraints: bool = False,
         ignore_dims: bool = False,
     ) -> bool:
+        # Продаваемость — ПЕРВОЙ и без смягчений: товар, которого нет в наличии или
+        # который стоит на витрине, не может попасть в комплект, какие бы
+        # требования ниже ни снимались ради полноты набора.
+        if not is_sellable(product):
+            return False
+
         # Конфликт подтипов («кофемашина» vs кофеварка, «камера» vs ларь): клиент
         # явно назвал подтип — противоположный в названии/атрибутах отсеиваем.
         if spec.raw_text and _subtype_conflict(spec.raw_text, _product_subtype_text(product)):
