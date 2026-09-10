@@ -26,6 +26,19 @@ from max_ekrom_bot.models import (  # noqa: E402
 from max_ekrom_bot.pdf.offer import _attrs_line, build_offer_pdf  # noqa: E402
 
 
+
+def _pdf_text(path) -> str:
+    """Текст всех страниц PDF одной строкой: переносы строк убраны.
+
+    reportlab на Linux и Windows берёт разные метрики шрифта, и длинный
+    заголовок переносится в разных местах — подстрока «Lex EDM 4575» на
+    сервере оказывалась разорвана переносом, хотя в документе она есть.
+    """
+    return " ".join(
+        (page.extract_text() or "").replace("\n", " ")
+        for page in PdfReader(str(path)).pages
+    )
+
 def _selection() -> SelectionResult:
     return SelectionResult(
         items=[
@@ -63,7 +76,7 @@ def test_build_offer_pdf_creates_readable_file(tmp_path):
     assert result.exists()
     assert result.stat().st_size > 800
 
-    text = "".join(page.extract_text() or "" for page in PdfReader(str(out)).pages)
+    text = _pdf_text(out)
     # латиница извлекается надёжно (кириллица в TTF тоже, но не зависим от движка)
     assert "Lex EDM 4575" in text
     assert "Lex HUBBLE 600" in text
@@ -142,5 +155,5 @@ def test_pdf_with_photos(monkeypatch, tmp_path):
     out = tmp_path / "with_photos.pdf"
     offer.build_offer_pdf(sel, Settings(LLM_PROVIDER="rule"), out)
     assert out.exists() and out.stat().st_size > 800
-    text = "".join(p.extract_text() or "" for p in PdfReader(str(out)).pages)
+    text = _pdf_text(out)
     assert "Lex EDM 4575" in text  # текст и характеристики на месте рядом с фото
