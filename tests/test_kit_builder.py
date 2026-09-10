@@ -551,3 +551,101 @@ def test_no_note_when_install_type_is_not_about_mounting():
     product = CatalogProduct(title="Кухонная вытяжка наклонная Midea", url="u",
                              price=18990, attributes={"Тип кухонной вытяжки": "Наклонная"})
     assert replacement_note(spec, product) == ""
+
+
+# ── Приоритет «одна коллекция», иначе — сочетание по цвету ───────────────────
+
+def _pc(brand, kind, price, color="чёрный", collection=None, in_stock=True):
+    """Товар с коллекцией в характеристиках (как кладёт краулер)."""
+    attrs = {"Цвет": color.capitalize()}
+    if collection:
+        attrs["Коллекция"] = collection
+    return CatalogProduct(title=f"{kind} {brand} MODEL {color}",
+                          url=f"u/{brand}/{kind}/{price}/{collection}", price=price,
+                          in_stock=in_stock, attributes=attrs)
+
+
+def test_kit_prefers_single_collection_over_cheaper_mix():
+    # Из линейки Spectrum комплект дороже, чем «сборная солянка» того же цвета —
+    # но правило заказчика: коллекция выше цены (при равном покрытии).
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD)]
+    cands = [
+        [_pc("Korting", "Духовой шкаф", 40000, collection="Spectrum"),
+         _pc("Korting", "Духовой шкаф", 30000, collection="GNBX")],
+        [_pc("Korting", "Варочная панель", 25000, collection="Spectrum"),
+         _pc("Korting", "Варочная панель", 18000)],                # без коллекции
+        [_pc("Korting", "Вытяжка", 15000, collection="Spectrum"),
+         _pc("Korting", "Вытяжка", 9000, collection="Selection")],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert kit.coverage == 3
+    assert kit.collection == "Spectrum"
+    chosen = {m.product.attributes.get("Коллекция") for m in kit.selection.matched}
+    assert chosen == {"Spectrum"}
+    assert "Коллекция Korting Spectrum" in kit.design_note
+
+
+def test_collection_never_beats_full_coverage():
+    # Из коллекции закрывается только 2 позиции из 3, а по цвету — все 3.
+    # Полнота комплекта важнее коллекции.
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD)]
+    cands = [
+        [_pc("Korting", "Духовой шкаф", 40000, collection="Spectrum")],
+        [_pc("Korting", "Варочная панель", 25000, collection="Spectrum")],
+        [_pc("Korting", "Вытяжка", 15000, collection="Crystal")],   # другой линейки
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert kit.coverage == 3
+
+
+def test_single_item_collection_is_not_a_collection():
+    # Коллекция засчитывается только при ≥2 позициях из неё.
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_pc("Korting", "Духовой шкаф", 40000, collection="Spectrum")],
+        [_pc("Korting", "Варочная панель", 25000)],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert kit.coverage == 2
+    assert kit.collection == ""
+    assert "Коллекция" not in kit.design_note
+
+
+def test_collectionless_items_are_neutral_and_noted():
+    # Две позиции из линейки + одна без коллекции в той же гамме: коллекция
+    # засчитана, пометка честно говорит «2 из 3».
+    specs = [_spec(OVEN), _spec(COOKTOP), _spec(HOOD)]
+    cands = [
+        [_pc("Korting", "Духовой шкаф", 40000, collection="Spectrum")],
+        [_pc("Korting", "Варочная панель", 25000, collection="Spectrum")],
+        [_pc("Korting", "Вытяжка", 15000)],
+    ]
+    kit = build_brand_kit("Korting", specs, cands, [])
+    assert kit.coverage == 3 and kit.collection == "Spectrum"
+    assert "2 из 3" in kit.design_note
+
+
+def test_falls_back_to_color_when_no_collection_data():
+    # Ни у кого нет коллекции (Midea) — прежняя логика по цвету без изменений.
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    cands = [
+        [_pc("Midea", "Духовой шкаф", 30000, color="белый"),
+         _pc("Midea", "Духовой шкаф", 28000, color="чёрный")],
+        [_pc("Midea", "Варочная панель", 20000, color="белый")],
+    ]
+    kit = build_brand_kit("Midea", specs, cands, [])
+    assert kit.coverage == 2 and kit.collection == ""
+    colors = {m.product.attributes["Цвет"] for m in kit.selection.matched}
+    assert colors == {"Белый"}                     # собрались в одну гамму
+
+
+def test_collection_ranks_above_design_in_rank_key():
+    from max_ekrom_bot.matching.combo_pricing import compute_combo
+    from max_ekrom_bot.matching.kit_builder import BrandKit
+    from max_ekrom_bot.models import SelectionResult
+
+    base = dict(brand="Korting", selection=SelectionResult(items=[]),
+                combo=compute_combo([], None), requested=3, coverage=3)
+    with_coll = BrandKit(**base, design_consistent=False, collection="Spectrum")
+    colored = BrandKit(**base, design_consistent=True)
+    assert with_coll.rank_key > colored.rank_key

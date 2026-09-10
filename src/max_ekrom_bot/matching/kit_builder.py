@@ -107,6 +107,9 @@ class BrandKit:
     coverage: int                       # сколько позиций удалось закрыть
     design_consistent: bool             # согласован ли комплект по цвету/финишу
     design_note: str = ""
+    # Коллекция (линейка) бренда, из которой собран комплект: ≥2 позиций с этой
+    # коллекцией в характеристиках. Пусто — комплект собран по цвету.
+    collection: str = ""
     manager_specs: list[ProductSpec] = field(default_factory=list)  # позиции → менеджеру
     rivals: list[BrandRival] = field(default_factory=list)  # проигравшие бренды
 
@@ -128,7 +131,11 @@ class BrandKit:
 
     @property
     def rank_key(self) -> tuple:
-        """Ключ сравнения: покрытие → дизайн → ЦЕНА С УЧЁТОМ ПОДАРКА → выгода.
+        """Ключ сравнения: покрытие → КОЛЛЕКЦИЯ → дизайн → цена с подарком → выгода.
+
+        Коллекция стоит выше цвета и цены по правилу заказчика (10.09.2026):
+        «в приоритете, чтобы товары были из одной коллекции; если нет — уже
+        сочетать по цвету». Полнота комплекта по-прежнему важнее всего.
 
         Раньше третьим критерием стояла рублёвая выгода, и она перевешивала цену.
         На живом запросе («духовка 450, варка, вытяжка полновстр., ПММ») бот брал
@@ -143,6 +150,7 @@ class BrandKit:
         """
         return (
             self.coverage,
+            1 if self.collection else 0,
             1 if self.design_consistent else 0,
             -round(self.effective_total / 100),
             self.combo.discount_total,
@@ -310,14 +318,23 @@ def _design_consistency(products: list[CatalogProduct]) -> tuple[bool, str]:
     return False, "В комплекте разные цвета — уточните сочетание у менеджера."
 
 
+def _product_collection(product: CatalogProduct) -> str:
+    """Коллекция (линейка) из характеристик: «Коллекция: Spectrum» → «Spectrum»."""
+    value = (product.attributes or {}).get("Коллекция")
+    return " ".join(str(value).split()) if value else ""
+
+
 def _finalize_kit(
     brand: str, specs: list[ProductSpec], items: list[MatchedItem],
     campaigns: list, gift_value: object | None, *, colored: bool,
+    collection: str | None = None,
 ) -> BrandKit:
     """Досчитать комплект по готовому набору позиций: выгода акции + пометка цвета.
 
     colored=True — набор собран по цветовой группе (цвета согласованы), пометку
     строим из фактических цветов; иначе — мягкая эвристика _design_consistency.
+    collection — набор собирался под эту линейку; засчитывается, только если в
+    итоге ≥2 позиций действительно из неё (иначе это не «одна коллекция»).
     """
     selection = SelectionResult(items=items)
     matched = selection.matched
@@ -334,6 +351,12 @@ def _finalize_kit(
         for m in matched
     ]
     combo = best_combo(combo_items, campaigns, gift_value)
+    # Коллекция засчитывается по ФАКТУ: сколько выбранных позиций из неё.
+    in_collection = (
+        sum(_product_collection(m.product) == collection for m in matched)
+        if collection else 0
+    )
+    kit_collection = collection if in_collection >= 2 else ""
     if colored and matched:
         # Явные цвета клиента могут «нарушать» группу (белая духовка + чёрная
         # варка по запросу) — это НЕ рассогласование, а выполнение требований.
@@ -345,10 +368,17 @@ def _finalize_kit(
             consistent, note = True, _palette_note([m.product for m in matched])
     else:
         consistent, note = _design_consistency([m.product for m in matched])
+    if kit_collection:
+        # Клиенту важнее «одна линейка», чем перечисление цветов; остальные
+        # позиции (без коллекции в карточке) подобраны в той же гамме.
+        tail = (f" ({in_collection} из {len(matched)} позиций; остальные — в той же гамме)"
+                if in_collection < len(matched) else "")
+        note = f"Коллекция {brand} {kit_collection}{tail}."
     return BrandKit(
         brand=brand, selection=selection, combo=combo,
         requested=len(specs), coverage=len(matched),
         design_consistent=consistent, design_note=note,
+        collection=kit_collection,
     )
 
 
@@ -384,7 +414,15 @@ def build_brand_kit(
     promo_models = _preferred_promo_models(campaigns, len({_spec_category(s) for s in specs}))
 
     def pick(spec: ProductSpec, ranked: list[CatalogProduct],
-             group: frozenset[str] | None) -> CatalogProduct | None:
+             group: frozenset[str] | None,
+             collection: str | None = None) -> CatalogProduct | None:
+        # Коллекция (линейка) — приоритет заказчика выше цвета: товары ЭТОЙ
+        # коллекции вперёд, без коллекции — следом как нейтральные (не мешают
+        # и не помогают), товары ДРУГОЙ коллекции — вон: смешивать линейки
+        # значит терять то, ради чего коллекцию и просили.
+        if collection:
+            ranked = ([p for p in ranked if _product_collection(p) == collection]
+                      + [p for p in ranked if not _product_collection(p)])
         # Явный цвет клиента: селектор уже отфильтровал — цветовая группа не давит.
         if group is None or spec.color:
             pool = ranked
@@ -414,10 +452,11 @@ def build_brand_kit(
                 return hot
         return pool[0]
 
-    def assemble(group: frozenset[str] | None) -> list[MatchedItem]:
+    def assemble(group: frozenset[str] | None,
+                 collection: str | None = None) -> list[MatchedItem]:
         items: list[MatchedItem] = []
         for spec, ranked in zip(specs, ranked_per_spec):
-            chosen = pick(spec, ranked, group)
+            chosen = pick(spec, ranked, group, collection)
             miss = (f"У бренда {brand} нет позиции"
                     + (" в этой цветовой гамме" if group else "") + " под этот пункт")
             items.append(MatchedItem(
@@ -426,8 +465,24 @@ def build_brand_kit(
             ))
         return items
 
-    # Для каждой цветовой ГРУППЫ — свой согласованный комплект; берём лучший.
+    # Коллекции, представленные у бренда среди кандидатов хотя бы по ДВУМ
+    # позициям: из одной позиции комплект «одной линейки» не собрать.
+    per_spec_collections = [
+        {c for c in map(_product_collection, ranked) if c} for ranked in ranked_per_spec
+    ]
+    collections = sorted({
+        c for c in set().union(*per_spec_collections)
+        if sum(c in s for s in per_spec_collections) >= 2
+    })
+
+    # Сначала — комплекты из одной коллекции (по каждой цветовой группе внутри
+    # неё), затем — обычные цветовые группы. Лучший — по rank_key, где коллекция
+    # стоит выше цвета и цены, но ниже полноты комплекта.
     group_kits = [
+        _finalize_kit(brand, specs, assemble(group, coll), campaigns, gift_value,
+                      colored=True, collection=coll)
+        for coll in collections for group in _COLOR_GROUPS
+    ] + [
         _finalize_kit(brand, specs, assemble(group), campaigns, gift_value, colored=True)
         for group in _COLOR_GROUPS
     ]
