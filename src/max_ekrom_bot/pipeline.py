@@ -284,7 +284,10 @@ class Pipeline:
         «премиум» не улетал в аномально дорогие выбросы каталога.
         """
         segment = {"budget": "эконом", "premium": "премиум"}.get(level or "", request.segment)
-        selector = ProductSelector(segment=segment)
+        selector = ProductSelector(
+            segment=segment,
+            hit_price_tolerance_pct=self._settings.hit_price_tolerance_pct,
+        )
         async with EkromClient(self._settings) as ekrom:
             sem = asyncio.Semaphore(_MAX_PARALLEL_SPECS)
 
@@ -329,7 +332,10 @@ class Pipeline:
         допустимые бренды («можно Kuppersberg Maunfeld») — перебираем только их.
         """
         segment = {"budget": "эконом", "premium": "премиум"}.get(level or "", request.segment)
-        selector = ProductSelector(segment=segment)
+        selector = ProductSelector(
+            segment=segment,
+            hit_price_tolerance_pct=self._settings.hit_price_tolerance_pct,
+        )
         gift_value = make_gift_valuer(cache.find_by_model) if cache is not None else None
 
         in_scope, manager_specs = split_out_of_scope(request.specs)

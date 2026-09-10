@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 _MSK = timezone(timedelta(hours=3))
 
 from ..config import Settings
+from ..matching.selector import is_bestseller
 from ..models import SelectionResult
 from ..pick_history import PickRecord
 from ..showrooms import SHOWROOMS
@@ -363,7 +364,10 @@ def format_kit(kit: object, settings: Settings) -> str:
 
     for m in kit.selection.matched:
         p = m.product
-        lines.append(f"• <b>{html.escape(p.title)}</b> — {_fmt_price(p.price or 0)}")
+        # «Хит продаж» — плашка сайта; показываем, чтобы клиент видел, почему
+        # выбрана эта модель, и чтобы пометка совпадала с карточкой на ekrom.
+        hit = " 🔥 <i>хит продаж</i>" if is_bestseller(p) else ""
+        lines.append(f"• <b>{html.escape(p.title)}</b> — {_fmt_price(p.price or 0)}{hit}")
         if m.reason:
             # Позиция закрыта заменой (например, дороже бюджета) — клиент должен
             # видеть это ДО разговора с менеджером, а не удивляться в счёте.

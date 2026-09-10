@@ -560,3 +560,95 @@ def test_bestseller_flag_detection():
     assert is_bestseller(_prod(attributes={"Хит продаж": "Да"})) is True
     assert is_bestseller(_prod(attributes={"Хит продаж": ""})) is False
     assert is_bestseller(_prod(attributes={})) is False
+
+
+# ── Приоритет «Хит продаж» ───────────────────────────────────────────────────
+
+def _oven(title, price, hit=False, color="Чёрный"):
+    from max_ekrom_bot.models import CatalogProduct
+    attrs = {"Цвет": color, "Ширина, мм": "600"}
+    if hit:
+        attrs["Хит продаж"] = "Да"
+    return CatalogProduct(title=title, url=title, price=price, in_stock=True,
+                          attributes=attrs)
+
+
+def test_bestseller_wins_at_equal_fit_and_price():
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф чёрный 600", color="чёрный", width_mm=600)
+    plain = _oven("Духовой шкаф A", 30000)
+    hit = _oven("Духовой шкаф B", 30000, hit=True)
+    ranked = ProductSelector().ranked_candidates(spec, [plain, hit])
+    assert ranked[0] is hit
+
+
+def test_bestseller_wins_within_price_tolerance():
+    # Хит дороже на 10 % при пороге 15 % — встаёт первым.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф чёрный", color="чёрный")
+    plain = _oven("Духовой шкаф A", 30000)
+    hit = _oven("Духовой шкаф B", 33000, hit=True)
+    ranked = ProductSelector(hit_price_tolerance_pct=15).ranked_candidates(spec, [plain, hit])
+    assert ranked[0] is hit
+
+
+def test_bestseller_loses_beyond_price_tolerance():
+    # Хит дороже на 30 % — плашка не оправдывает переплату, первым остаётся дешёвый.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф чёрный", color="чёрный")
+    plain = _oven("Духовой шкаф A", 30000)
+    hit = _oven("Духовой шкаф B", 39000, hit=True)
+    ranked = ProductSelector(hit_price_tolerance_pct=15).ranked_candidates(spec, [plain, hit])
+    assert ranked[0] is plain
+
+
+def test_bestseller_never_overrides_client_requirements():
+    # Хит другого цвета не должен обойти модель нужного цвета: требования
+    # клиента важнее плашки. Требование по цвету — жёсткий фильтр, хит выпадает.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф белый", color="белый")
+    white = _oven("Духовой шкаф A", 30000, color="Белый")
+    black_hit = _oven("Духовой шкаф B", 30000, hit=True, color="Чёрный")
+    ranked = ProductSelector().ranked_candidates(spec, [white, black_hit])
+    assert ranked and ranked[0] is white
+    assert black_hit not in ranked
+
+
+def test_bestseller_not_promoted_when_worse_on_attributes():
+    # Оба прошли фильтры, но хит хуже по запрошенным характеристикам — не
+    # поднимаем: сначала соответствие запросу, потом плашка.
+    from max_ekrom_bot.matching.selector import ProductSelector
+    from max_ekrom_bot.models import AttrConstraint, ProductSpec
+
+    spec = ProductSpec(raw_text="духовой шкаф с пиролизом", attr_constraints=[
+        AttrConstraint(attribute="Система очистки", op="approx", value="Пиролиз")])
+    good = _oven("Духовой шкаф A", 30000)
+    good.attributes["Система очистки"] = "Пиролиз"
+    hit = _oven("Духовой шкаф B", 30000, hit=True)
+    hit.attributes["Система очистки"] = "Гидролиз"          # не то, что просили
+    ranked = ProductSelector().ranked_candidates(spec, [good, hit])
+    assert ranked[0] is good
+
+
+def test_kit_message_marks_bestseller():
+    from max_ekrom_bot.config import Settings
+    from max_ekrom_bot.matching.combo_pricing import compute_combo
+    from max_ekrom_bot.matching.kit_builder import BrandKit
+    from max_ekrom_bot.messenger.client_ux import format_kit
+    from max_ekrom_bot.models import ApplianceType, MatchedItem, ProductSpec, SelectionResult
+
+    hit = _oven("Духовой шкаф Korting B", 30000, hit=True)
+    item = MatchedItem(spec=ProductSpec(appliance=ApplianceType.OVEN, raw_text="духовка"),
+                       product=hit, candidates_count=1)
+    kit = BrandKit(brand="Korting", selection=SelectionResult(items=[item]),
+                   combo=compute_combo([], None), requested=1, coverage=1,
+                   design_consistent=True)
+    assert "хит продаж" in format_kit(kit, Settings(telegram_bot_token="x"))

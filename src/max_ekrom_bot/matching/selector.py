@@ -529,9 +529,14 @@ def _product_width(product: CatalogProduct) -> int | None:
 
 
 class ProductSelector:
-    def __init__(self, segment: str | None = None) -> None:
+    def __init__(
+        self, segment: str | None = None, hit_price_tolerance_pct: float = 15.0,
+    ) -> None:
         # segment: 'эконом' → дешевле, 'премиум' → дороже, иначе → средний
         self._segment = (segment or "средний").lower()
+        # На сколько процентов «Хит продаж» может быть дороже лучшего по скорингу
+        # кандидата и всё ещё встать первым (правило заказчика: приоритет хитам).
+        self._hit_tol = max(0.0, float(hit_price_tolerance_pct)) / 100.0
 
     def select_one(self, spec: ProductSpec, candidates: list[CatalogProduct]) -> MatchedItem:
         ranked = self.ranked_candidates(spec, candidates)
@@ -590,9 +595,45 @@ class ProductSelector:
             if within:
                 priced = within
         prices = sorted(c.price or 0.0 for c in priced)
-        return sorted(
+        ranked = sorted(
             priced, key=lambda c: self._score(spec, c, prices), reverse=True
         )
+        return self._promote_bestsellers(spec, ranked)
+
+    def _promote_bestsellers(
+        self, spec: ProductSpec, ranked: list[CatalogProduct]
+    ) -> list[CatalogProduct]:
+        """Поднять «Хит продаж» наверх — но только среди равно подходящих.
+
+        Правило заказчика: приоритет сборки по плашке хита. Ограничения, чтобы хит
+        не ломал подбор:
+        - хит не хуже лучшего кандидата по характеристикам (требования клиента —
+          цвет/размер/тип — важнее плашки);
+        - хит не дороже лучшего больше, чем на `hit_price_tolerance_pct`
+          (по умолчанию 15 %): плашка не оправдывает заметную переплату.
+        Внутри поднятых хитов сохраняется прежний порядок скоринга.
+        """
+        if len(ranked) < 2:
+            return ranked
+        best = ranked[0]
+        if is_bestseller(best):
+            return ranked
+        best_attr = self._attr_norm(spec, best)
+        cap = (best.price or 0.0) * (1.0 + self._hit_tol)
+        hits = [
+            c for c in ranked[1:]
+            if is_bestseller(c)
+            and (c.price or 0.0) <= cap
+            and self._attr_norm(spec, c) >= best_attr
+        ]
+        if not hits:
+            return ranked
+        hit_ids = {id(c) for c in hits}
+        return hits + [c for c in ranked if id(c) not in hit_ids]
+
+    def _attr_norm(self, spec: ProductSpec, product: CatalogProduct) -> float:
+        matched, requested = self._attr_signals(spec, product)
+        return (matched / requested) if requested else 0.0
 
     def select_all(
         self, specs_with_candidates: list[tuple[ProductSpec, list[CatalogProduct]]]
