@@ -584,28 +584,17 @@ def test_bestseller_wins_at_equal_fit_and_price():
     assert ranked[0] is hit
 
 
-def test_bestseller_wins_within_price_tolerance():
-    # Хит дороже на 10 % при пороге 15 % — встаёт первым.
+def test_bestseller_wins_regardless_of_price():
+    # Правило заказчика: у хита приоритет без ограничения по цене — даже заметно
+    # более дорогой хит встаёт первым среди равно подходящих моделей.
     from max_ekrom_bot.matching.selector import ProductSelector
     from max_ekrom_bot.models import ProductSpec
 
     spec = ProductSpec(raw_text="духовой шкаф чёрный", color="чёрный")
     plain = _oven("Духовой шкаф A", 30000)
-    hit = _oven("Духовой шкаф B", 33000, hit=True)
-    ranked = ProductSelector(hit_price_tolerance_pct=15).ranked_candidates(spec, [plain, hit])
+    hit = _oven("Духовой шкаф B", 45000, hit=True)          # на 50 % дороже
+    ranked = ProductSelector().ranked_candidates(spec, [plain, hit])
     assert ranked[0] is hit
-
-
-def test_bestseller_loses_beyond_price_tolerance():
-    # Хит дороже на 30 % — плашка не оправдывает переплату, первым остаётся дешёвый.
-    from max_ekrom_bot.matching.selector import ProductSelector
-    from max_ekrom_bot.models import ProductSpec
-
-    spec = ProductSpec(raw_text="духовой шкаф чёрный", color="чёрный")
-    plain = _oven("Духовой шкаф A", 30000)
-    hit = _oven("Духовой шкаф B", 39000, hit=True)
-    ranked = ProductSelector(hit_price_tolerance_pct=15).ranked_candidates(spec, [plain, hit])
-    assert ranked[0] is plain
 
 
 def test_bestseller_never_overrides_client_requirements():

@@ -107,10 +107,6 @@ class Settings(BaseSettings):
     use_catalog_cache: bool = Field(default=False, alias="USE_CATALOG_CACHE")
     catalog_cache_ttl: int = Field(default=259200, alias="CATALOG_CACHE_TTL")  # 72 ч
 
-    # «Хит продаж» (плашка сайта) встаёт первым среди равно подходящих моделей,
-    # если он дороже лучшего по скорингу не более чем на этот процент. 0 — хит
-    # побеждает только при цене не выше; большое число — почти всегда.
-    hit_price_tolerance_pct: float = Field(default=15.0, alias="HIT_PRICE_TOLERANCE_PCT")
 
     @staticmethod
     def _parse_ids(raw: str) -> frozenset[int]:
