@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from ..models import ApplianceType, CatalogProduct, MatchedItem, ProductSpec, SelectionResult
@@ -223,9 +224,15 @@ def _spec_category(spec: ProductSpec) -> str:
 
 
 def _brand_of(product: CatalogProduct, brand: str) -> bool:
-    """Товар относится к бренду (по названию или полю brand)."""
-    b = brand.lower()
-    return b in (product.title or "").lower() or b in (product.brand or "").lower()
+    """Товар относится к бренду (по названию или полю brand).
+
+    Сравниваем по границам слова, а не подстрокой: «lex» входит в «FLEX», и в
+    комплект Lex попадала вытяжка Evelux FLEX 60, а в «коллекции Lex» — пылесос
+    Haier FLEXI (12 ложных совпадений в каталоге на 10.09.2026).
+    """
+    pattern = re.compile(rf"(?<![a-zа-яё0-9]){re.escape(brand.lower())}(?![a-zа-яё0-9])")
+    return bool(pattern.search((product.title or "").lower())
+                or pattern.search((product.brand or "").lower()))
 
 
 def _preferred_promo_models(campaigns: list, positions: int = 0) -> list[str]:

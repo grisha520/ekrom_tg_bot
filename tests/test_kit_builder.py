@@ -649,3 +649,18 @@ def test_collection_ranks_above_design_in_rank_key():
     with_coll = BrandKit(**base, design_consistent=False, collection="Spectrum")
     colored = BrandKit(**base, design_consistent=True)
     assert with_coll.rank_key > colored.rank_key
+
+
+def test_brand_match_is_word_bounded():
+    # «lex» входит в «FLEX»: вытяжка Evelux FLEX 60 попадала в комплект Lex,
+    # пылесос Haier FLEXI — в «коллекцию Lex». Сравниваем по границам слова.
+    from max_ekrom_bot.matching.kit_builder import _brand_of
+
+    assert _brand_of(CatalogProduct(title="Кухонная вытяжка Lex HUBBLE 600", url="a", price=1), "Lex")
+    assert _brand_of(CatalogProduct(title="Вытяжка LEX SIMPLE 600 INOX", url="b", price=1), "Lex")
+    assert _brand_of(CatalogProduct(title="Посудомойка Lex, встраиваемая", url="c", price=1), "Lex")
+    assert not _brand_of(CatalogProduct(title="Кухонная вытяжка Evelux FLEX 60 BG", url="d", price=1), "Lex")
+    assert not _brand_of(CatalogProduct(title="Пылесос Haier C3 FLEXI", url="e", price=1), "Lex")
+    assert not _brand_of(CatalogProduct(title="Смеситель Gerdamix FLEX WHITE", url="f", price=1), "Lex")
+    # поле brand тоже учитывается
+    assert _brand_of(CatalogProduct(title="Духовка X", url="g", price=1, brand="Lex"), "Lex")
