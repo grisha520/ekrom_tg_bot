@@ -39,6 +39,27 @@ def main() -> None:
     print(f"всего товаров в кэше: {cache.count()}")
     print(f"с характеристиками:  {cache.attributes_count()}")
     print(f"с фото:              {len(cache.image_pairs())}")
+    _purge_attr_map_cache(cache, results)
+
+
+def _purge_attr_map_cache(cache: CatalogCache, results: dict[str, int]) -> None:
+    """Убрать из кэша привязки записи под схемы, которых после краула больше нет.
+
+    Ключ кэша включает отпечаток схемы категории, поэтому устаревшие записи и так
+    не срабатывают — но без чистки они копились бы бесконечно.
+    """
+    try:
+        from max_ekrom_bot.matching.attr_schema import build_category_schema
+        from max_ekrom_bot.parsing.attr_map_cache import AttrMapCache, schema_fingerprint
+
+        live = {
+            schema_fingerprint(build_category_schema(cache.query_category(path)))
+            for path in results
+        }
+        removed = AttrMapCache(get_settings().catalog_db_path).purge_stale(live)
+        print(f"кэш привязки характеристик: удалено устаревших записей — {removed}")
+    except Exception as exc:  # noqa: BLE001 — чистка кэша не должна валить краул
+        print(f"кэш привязки характеристик: чистка пропущена ({exc!r})")
 
 
 if __name__ == "__main__":

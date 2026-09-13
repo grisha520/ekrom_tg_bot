@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     use_catalog_cache: bool = Field(default=False, alias="USE_CATALOG_CACHE")
     catalog_cache_ttl: int = Field(default=259200, alias="CATALOG_CACHE_TTL")  # 72 ч
 
+    # Кэш привязки характеристик (схемо-маппер): одинаковые формулировки позиций
+    # («духовой шкаф чёрный 60 см») не гоняются в YandexGPT Pro повторно. Это
+    # ~88 % стоимости запроса; с кэшем ожидаемо 0,5–1 ₽ вместо ~4 ₽. Ключ
+    # включает отпечаток схемы категории, так что после краула с новыми
+    # атрибутами старые записи сами становятся промахами. Выкл — как раньше.
+    attr_map_cache: bool = Field(default=True, alias="ATTR_MAP_CACHE")
+
 
     @staticmethod
     def _parse_ids(raw: str) -> frozenset[int]:

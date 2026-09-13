@@ -218,7 +218,14 @@ class Pipeline:
         if self._attr_mapper is None:
             from .parsing.attr_mapper import AttrMapper
 
-            self._attr_mapper = AttrMapper(settings=self._settings)
+            # Кэш привязки живёт в том же catalog.db и включается вместе с ним:
+            # без кэша каталога нет и схем категорий, кэшировать нечего.
+            cache = None
+            if self._settings.use_catalog_cache and self._settings.attr_map_cache:
+                from .parsing.attr_map_cache import AttrMapCache
+
+                cache = AttrMapCache(self._settings.catalog_db_path)
+            self._attr_mapper = AttrMapper(settings=self._settings, cache=cache)
         return self._attr_mapper
 
     def _spec_category_path(self, spec) -> str | None:

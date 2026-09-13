@@ -604,10 +604,30 @@ async def cmd_stats(message: Message) -> None:
         return
     try:
         stats = _metrics().stats()
-        await message.answer(format_admin_stats(stats), parse_mode=ParseMode.HTML)
+        text = format_admin_stats(stats) + _attr_cache_stats_line()
+        await message.answer(text, parse_mode=ParseMode.HTML)
     except Exception:  # noqa: BLE001
         logger.exception("stats failed")
         await message.answer("Не удалось собрать статистику.")
+
+
+def _attr_cache_stats_line() -> str:
+    """Строка про кэш привязки характеристик: сколько Pro-вызовов сэкономлено.
+
+    Каждое попадание — не сделанный вызов YandexGPT Pro (~1,2 ₽/1k токенов,
+    ~88 % стоимости запроса). Пусто, если кэш выключен или недоступен.
+    """
+    s = get_settings()
+    if not (s.use_catalog_cache and s.attr_map_cache):
+        return ""
+    try:
+        from .parsing.attr_map_cache import AttrMapCache
+
+        st = AttrMapCache(s.catalog_db_path).stats()
+    except Exception:  # noqa: BLE001 — статистика не критична
+        return ""
+    return (f"\n\n🧠 Кэш привязки характеристик: <b>{st['entries']}</b> записей, "
+            f"сэкономлено LLM-вызовов: <b>{st['hits']}</b>")
 
 
 async def cmd_status(message: Message) -> None:

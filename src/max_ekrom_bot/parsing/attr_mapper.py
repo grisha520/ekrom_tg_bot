@@ -16,6 +16,7 @@ import re
 from ..config import Settings, get_settings
 from ..llm import LLMProvider
 from ..models import AttrConstraint, ProductSpec
+from .attr_map_cache import AttrMapCache
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +95,15 @@ def _schema_lines(schema: dict[str, dict]) -> str:
 
 
 class AttrMapper:
-    def __init__(self, llm: LLMProvider | None = None, settings: Settings | None = None) -> None:
+    def __init__(
+        self, llm: LLMProvider | None = None, settings: Settings | None = None,
+        cache: "AttrMapCache | None" = None,
+    ) -> None:
         self._settings = settings or get_settings()
         self._llm = llm
+        # Кэш ответов (см. attr_map_cache.py): Pro-вызов — ~88 % стоимости
+        # запроса, а формулировки клиентов повторяются. None — без кэша.
+        self._cache = cache
 
     def _get_llm(self) -> LLMProvider:
         if self._llm is None:
@@ -121,14 +128,30 @@ class AttrMapper:
         if not indexed:
             return
         single = len(indexed) == 1
-        blocks = []
-        for i, spec, schema in indexed:
-            text = original_message if (single and original_message) else (
+
+        # Текст позиции, по которому и спрашиваем модель, и ключуем кэш. Для
+        # одной позиции парсер часто обрезает raw_text — берём полный запрос.
+        def pos_text(spec: ProductSpec) -> str:
+            return original_message if (single and original_message) else (
                 spec.raw_text or spec.appliance.value)
-            blocks.append(
-                f"ПОЗИЦИЯ {i}: {text}\n"
-                f"Атрибуты категории:\n{_schema_lines(schema)}"
-            )
+
+        # 1. Кэш: что уже привязывали — применяем сразу, в LLM не отправляем.
+        pending: list[tuple[int, ProductSpec, dict]] = []
+        for i, spec, schema in indexed:
+            cached = self._cache.get(pos_text(spec), schema) if self._cache else None
+            if cached is None:
+                pending.append((i, spec, schema))
+            else:
+                self._apply(spec, schema, cached)
+        if not pending:
+            return
+
+        # 2. LLM — только по промахам.
+        blocks = [
+            f"ПОЗИЦИЯ {i}: {pos_text(spec)}\n"
+            f"Атрибуты категории:\n{_schema_lines(schema)}"
+            for i, spec, schema in pending
+        ]
         prefix = (
             f"Полный запрос клиента: {original_message}\n\n"
             if original_message and not single else ""
@@ -141,22 +164,33 @@ class AttrMapper:
             logger.warning("схемо-маппер не удался", exc_info=True)
             return
 
-        for i, spec, schema in indexed:
+        for i, spec, schema in pending:
             items_for_pos = mapping.get(str(i), mapping.get(i)) or []
-            valid_keys = set(schema)
-            constraints = []
-            for c in items_for_pos:
-                if not (isinstance(c, dict) and c.get("attribute") in valid_keys
-                        and str(c.get("value") or "").strip()):
-                    continue  # только реальные атрибуты категории с непустым значением
-                checked = _sanity_check(c, schema[c["attribute"]])
-                if checked is None:
-                    logger.info("маппер: ограничение отброшено sanity-check: %s", c)
-                    continue
-                try:
-                    constraints.append(AttrConstraint(**checked))
-                except Exception:  # noqa: BLE001 — кривой элемент пропускаем
-                    continue
-            if constraints:
-                spec.attr_constraints = constraints
-                spec.extra = {}  # маппер точнее свободного extra — заменяем
+            raw_list = [c for c in items_for_pos if isinstance(c, dict)]
+            self._apply(spec, schema, raw_list)
+            # 3. В кэш кладём СЫРОЙ ответ модели (до sanity-check): проверка
+            # дешёвая и повторяется при чтении — так её правки применяются и к
+            # старым записям. Пустой ответ тоже кэшируем: он был оплачен.
+            if self._cache:
+                self._cache.put(pos_text(spec), schema, raw_list)
+
+    @staticmethod
+    def _apply(spec: ProductSpec, schema: dict, items_for_pos: list[dict]) -> None:
+        """Проверить ограничения по схеме и записать в spec (общее для кэша и LLM)."""
+        valid_keys = set(schema)
+        constraints = []
+        for c in items_for_pos:
+            if not (isinstance(c, dict) and c.get("attribute") in valid_keys
+                    and str(c.get("value") or "").strip()):
+                continue  # только реальные атрибуты категории с непустым значением
+            checked = _sanity_check(c, schema[c["attribute"]])
+            if checked is None:
+                logger.info("маппер: ограничение отброшено sanity-check: %s", c)
+                continue
+            try:
+                constraints.append(AttrConstraint(**checked))
+            except Exception:  # noqa: BLE001 — кривой элемент пропускаем
+                continue
+        if constraints:
+            spec.attr_constraints = constraints
+            spec.extra = {}  # маппер точнее свободного extra — заменяем
