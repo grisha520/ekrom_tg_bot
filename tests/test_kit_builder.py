@@ -664,3 +664,42 @@ def test_brand_match_is_word_bounded():
     assert not _brand_of(CatalogProduct(title="Смеситель Gerdamix FLEX WHITE", url="f", price=1), "Lex")
     # поле brand тоже учитывается
     assert _brand_of(CatalogProduct(title="Духовка X", url="g", price=1, brand="Lex"), "Lex")
+
+
+# ── Бренды по-русски ─────────────────────────────────────────────────────────
+
+def test_cyrillic_brand_is_recognised_not_foreign():
+    # «Куперсберг духовка и варочная» уходило менеджеру как ЧУЖОЙ бренд:
+    # сравнение шло только с латиницей. Кириллица и опечатки — это наш бренд.
+    from max_ekrom_bot.matching.kit_builder import canonical_brand
+
+    assert canonical_brand("Куперсберг") == "Kuppersberg"
+    assert canonical_brand("купперсберга") == "Kuppersberg"
+    assert canonical_brand("Кортинг") == "Korting"
+    assert canonical_brand("маунфельд") == "Maunfeld"
+    assert canonical_brand("Мидея") == "Midea"
+    assert canonical_brand("лекс") == "Lex"
+    assert canonical_brand("Kuppersberg") == "Kuppersberg"
+    assert canonical_brand("Bosch") is None
+    assert canonical_brand("") is None and canonical_brand(None) is None
+
+
+def test_split_out_of_scope_keeps_cyrillic_brand():
+    specs = [_spec(OVEN, brand="Куперсберг"), _spec(COOKTOP, brand="Кортинг"),
+             _spec(HOOD, brand="Bosch")]
+    in_scope, manager = split_out_of_scope(specs)
+    assert [s.appliance for s in in_scope] == [OVEN, COOKTOP]
+    assert [s.appliance for s in manager] == [HOOD]
+
+
+def test_client_brands_from_cyrillic_message():
+    specs = [_spec(OVEN), _spec(COOKTOP)]
+    assert client_brands(specs, "Куперсберг духовка и варочная") == ("Kuppersberg",)
+    assert client_brands(specs, "можно Кортинг или Маунфелд") == ("Korting", "Maunfeld")
+    assert client_brands(specs, "духовка и варочная") == (
+        "Korting", "Maunfeld", "Midea", "Lex", "Kuppersberg")
+
+
+def test_client_brands_mixed_scripts():
+    specs = [_spec(OVEN, brand="Мидеа")]
+    assert client_brands(specs, "хочу Midea или мидеа") == ("Midea",)

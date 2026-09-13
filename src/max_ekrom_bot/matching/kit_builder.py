@@ -35,6 +35,34 @@ from .selector import (
 # Пять брендов проекта (дублируем как строки, чтобы не тянуть сетевой модуль promos).
 TARGET_BRANDS: tuple[str, ...] = ("Korting", "Maunfeld", "Midea", "Lex", "Kuppersberg")
 
+# Как клиенты пишут эти бренды по-русски (и с опечатками). На живом прогоне
+# «Куперсберг духовка и варочная» ушло менеджеру как ЧУЖОЙ бренд — сравнение
+# шло только с латиницей. Стемы, без окончаний: ловят «Куперсберга», «Кортингом».
+_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "Korting": ("korting", "кортинг"),
+    "Maunfeld": ("maunfeld", "маунфелд", "маунфельд", "манфелд"),
+    "Midea": ("midea", "мидеа", "мидея", "мидиа"),
+    "Lex": ("lex", "лекс"),
+    "Kuppersberg": ("kuppersberg", "куперсберг", "купперсберг", "куперсбер", "купперсбер"),
+}
+
+
+def canonical_brand(text: str | None) -> str | None:
+    """Бренд из пятёрки по любому написанию («Куперсберг» → «Kuppersberg»), иначе None."""
+    low = (text or "").lower()
+    if not low:
+        return None
+    for brand, aliases in _BRAND_ALIASES.items():
+        if any(a in low for a in aliases):
+            return brand
+    return None
+
+
+def mentioned_brands(text: str) -> tuple[str, ...]:
+    """Все бренды пятёрки, упомянутые в тексте (в любом написании), в порядке TARGET_BRANDS."""
+    low = (text or "").lower()
+    return tuple(b for b in TARGET_BRANDS if any(a in low for a in _BRAND_ALIASES[b]))
+
 # Позиции вне охвата бота (решение заказчика: только техника 5 брендов; мойки,
 # смесители, измельчители, фильтры, сантехника — подбирает менеджер).
 _OUT_OF_SCOPE_STEMS: tuple[str, ...] = (
@@ -58,7 +86,8 @@ def split_out_of_scope(specs: list[ProductSpec]) -> tuple[list[ProductSpec], lis
         txt = " ".join(x for x in (s.raw_text, s.category_name or "") if x).lower()
         url = (s.category_url or "").lower()
         brand = (s.brand or "").strip().lower()
-        foreign_brand = bool(brand) and not any(b.lower() in brand for b in TARGET_BRANDS)
+        # Чужой бренд — названный, но не из пятёрки ни в одном написании.
+        foreign_brand = bool(brand) and canonical_brand(brand) is None
 
         # Известный тип техники (духовка/варочная/…/ПОСУДОМОЙКА) — это техника 5
         # брендов, а не сантехника. Стоп-слова применяем только к нераспознанным
@@ -80,11 +109,8 @@ def client_brands(specs: list[ProductSpec], original_message: str = "") -> tuple
     Эталон: «можно Kuppersberg Maunfeld: …» → перебираем только их. Ищем упоминания
     и в брендах позиций, и в исходном сообщении.
     """
-    blob = (original_message or "").lower() + " " + " ".join(
-        (s.brand or "").lower() for s in specs
-    )
-    mentioned = tuple(b for b in TARGET_BRANDS if b.lower() in blob)
-    return mentioned or TARGET_BRANDS
+    blob = (original_message or "") + " " + " ".join(s.brand or "" for s in specs)
+    return mentioned_brands(blob) or TARGET_BRANDS
 
 
 @dataclass
