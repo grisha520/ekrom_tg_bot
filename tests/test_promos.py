@@ -223,6 +223,8 @@ def test_extract_rules_from_action_descr():
 
 
 def test_promo_store_spec_roundtrip(tmp_path):
+    from datetime import date
+
     html = (
         '<div class="title title--banner"><h2>Kuppersberg: Холодильник по спец цене!</h2></div>'
         f'<div class="action-descr__inner"><p>{KUP_SPEC_RULES}</p></div>'
@@ -230,7 +232,10 @@ def test_promo_store_spec_roundtrip(tmp_path):
     camp = parse_campaign(html, "kup_spec", BASE)
     store = PromoStore(tmp_path / "c.db")
     store.replace_all([camp])
-    row = store.campaigns_for_brand("Kuppersberg")[0]
+    # Дата внутри срока акции из правил (01.07–30.09.2026): хранилище отсекает
+    # истёкшие кампании по «сегодня», и без фиксированной даты тест начал
+    # падать сам собой с 01.10.2026.
+    row = store.campaigns_for_brand("Kuppersberg", today=date(2026, 8, 1))[0]
     assert row["mechanic"] == "spec_price"
     assert row["spec"]["tiers"] == {3: 40000.0, 4: 27000.0}
     assert row["spec"]["models"] == ["RBN 1761", "RBN 1965"]
